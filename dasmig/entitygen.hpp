@@ -138,8 +138,15 @@ class entity
     // Get all component keys present in this entity, in generation order.
     [[nodiscard]] std::vector<std::wstring> keys() const
     {
-        return _entries | std::views::transform(&entry::key)
-                        | std::ranges::to<std::vector<std::wstring>>();
+        std::vector<std::wstring> result;
+        result.reserve(_entries.size());
+
+        for (const auto& e : _entries)
+        {
+            result.push_back(e.key);
+        }
+
+        return result;
     }
 
     // Operator ostream streaming all component values in generation order.
