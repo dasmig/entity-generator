@@ -1,13 +1,6 @@
 # Entity Generator for C++
 
-```
-              __  _ __                                            __
-  ___  ____  / /_(_) /___  __   ____ ____  ____  ___  _________ _/ /_____  _____
- / _ \/ __ \/ __/ / __/ / / /  / __ `/ _ \/ __ \/ _ \/ ___/ __ `/ __/ __ \/ ___/
-/  __/ / / / /_/ / /_/ /_/ /  / /_/ /  __/ / / /  __/ /  / /_/ / /_/ /_/ / /
-\___/_/ /_/\__/_/\__/\__, /   \__, /\___/_/ /_/\___/_/   \__,_/\__/\____/_/
-                    /____/   /____/
-```
+[![Entity Generator for C++](https://raw.githubusercontent.com/dasmig/nickname-generator/master/doc/entity-generator.png)](https://github.com/dasmig/entity-generator/releases)
 
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/dasmig/entity-generator/main/LICENSE)
 [![GitHub Releases](https://img.shields.io/github/release/dasmig/entity-generator.svg)](https://github.com/dasmig/entity-generator/releases)
