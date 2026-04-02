@@ -30,6 +30,8 @@ The library currently supports the following:
 
 - **Reproducible Randomness**. Seed the generator for deterministic output. Supports per-call seeds and generator-level seeding for reproducible sequences.
 
+- **Seed Signatures**. Every generated entity and component stores the random seed used to produce it, enabling replay and debugging.
+
 - **Fluent Registration**. Chain `add()` and `remove()` calls to configure the generator.
 
 - **Composable**. Components can internally use [name-generator](https://github.com/dasmig/name-generator) and [nickname-generator](https://github.com/dasmig/nickname-generator) or any other logic.
@@ -232,4 +234,39 @@ class position : public dasmig::component
         return L"(" + std::to_wstring(pos.x) + L", " + std::to_wstring(pos.y) + L")";
     }
 };
+```
+
+### Seed Signatures
+
+Every generated entity and component stores the random seed that produced it. This enables replay, debugging, and logging.
+
+```cpp
+auto entity = eg::instance().generate();
+
+// Retrieve the entity-level seed. This single value can reproduce
+// all component seeds and thus the entire entity.
+std::uint64_t entity_seed = entity.seed();
+
+// Retrieve the seed used for a specific component.
+std::uint64_t age_seed = entity.seed(L"age");
+```
+
+Component seeds can be used to replay individual component generation:
+
+```cpp
+// Replay a component's random values using its captured seed.
+effolkronium::random_local rng;
+rng.seed(static_cast<std::mt19937::result_type>(entity.seed(L"age")));
+int replayed_age = rng.get(18, 65); // Same value as entity.get<int>(L"age")
+```
+
+The seed hierarchy is fully deterministic:
+
+```
+generation seed (per-call or generator-level)
+  └─ entity seed          ← entity.seed()
+       └─ local engine
+            ├─ component A seed   ← entity.seed(L"A")
+            ├─ component B seed   ← entity.seed(L"B")
+            └─ ...
 ```

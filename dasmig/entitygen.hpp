@@ -135,6 +135,27 @@ class entity
         });
     }
 
+    // Retrieve the random seed used to generate a specific component.
+    // This seed can be used to reproduce the component's random values.
+    [[nodiscard]] std::uint64_t seed(const std::wstring& component_key) const
+    {
+        auto it = std::ranges::find(_entries, component_key, &entry::key);
+
+        if (it == _entries.end())
+        {
+            throw std::out_of_range("component not found");
+        }
+
+        return it->seed;
+    }
+
+    // Retrieve the random seed used to generate this entity. This seed
+    // can reproduce all component seeds and thus the entire entity.
+    [[nodiscard]] std::uint64_t seed() const
+    {
+        return _seed;
+    }
+
     // Get all component keys present in this entity, in generation order.
     [[nodiscard]] std::vector<std::wstring> keys() const
     {
@@ -167,6 +188,7 @@ class entity
         std::wstring key;
         std::any value;
         std::wstring display;
+        std::uint64_t seed;
     };
 
     // Private constructor, this is mostly a helper class to the entity
@@ -188,6 +210,9 @@ class entity
 
     // Component entries in generation order.
     std::vector<entry> _entries;
+
+    // Seed used to generate this entity.
+    std::uint64_t _seed{0};
 
     // Allows entity generator to construct entities.
     friend class eg;
@@ -351,17 +376,26 @@ class eg
     {
         entity generated_entity;
         generation_context ctx;
-        ctx._random.seed(engine());
+
+        // Derive an entity-level seed and use it to create a local engine
+        // for per-component seed derivation.
+        auto entity_seed = static_cast<std::uint64_t>(engine());
+        generated_entity._seed = entity_seed;
+        std::mt19937 local_engine{static_cast<std::mt19937::result_type>(entity_seed)};
 
         for (const auto& [key, comp] : components)
         {
+            auto component_seed = static_cast<std::uint64_t>(local_engine());
+            ctx._random.seed(static_cast<std::mt19937::result_type>(component_seed));
+
             auto value = comp->generate(ctx);
             auto display = comp->to_string(value);
 
             ctx._values[key] = value;
             generated_entity._entries.push_back(
                 {.key = key, .value = std::move(value),
-                 .display = std::move(display)});
+                 .display = std::move(display),
+                 .seed = component_seed});
         }
 
         return generated_entity;

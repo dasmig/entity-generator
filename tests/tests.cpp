@@ -913,3 +913,140 @@ TEST_CASE("seeded generation reproduces dependent computed values", "[context][s
 
     REQUIRE(e1.get<int>(L"scaled") == e2.get<int>(L"scaled"));
 }
+
+// ---------------------------------------------------------------------------
+// Component seed signature
+// ---------------------------------------------------------------------------
+
+TEST_CASE("entity::seed returns the seed used for a component", "[seed][signature]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
+
+    auto e = gen.generate(42);
+    // Should not throw — seed exists for every generated component.
+    REQUIRE_NOTHROW(e.seed(L"rand"));
+}
+
+TEST_CASE("same generation seed produces same component seeds", "[seed][signature]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<random_int_component>(L"a", 1, 10000))
+       .add(std::make_unique<random_int_component>(L"b", 1, 10000));
+
+    auto e1 = gen.generate(42);
+    auto e2 = gen.generate(42);
+
+    REQUIRE(e1.seed(L"a") == e2.seed(L"a"));
+    REQUIRE(e1.seed(L"b") == e2.seed(L"b"));
+}
+
+TEST_CASE("different components get different seeds", "[seed][signature]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<random_int_component>(L"a", 1, 10000))
+       .add(std::make_unique<random_int_component>(L"b", 1, 10000));
+
+    auto e = gen.generate(42);
+
+    // Each component should be seeded independently.
+    REQUIRE(e.seed(L"a") != e.seed(L"b"));
+}
+
+TEST_CASE("component seed reproduces the same value when used directly", "[seed][signature]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
+
+    auto e = gen.generate(42);
+    auto captured_seed = e.seed(L"rand");
+    int original_value = e.get<int>(L"rand");
+
+    // Manually seed a random engine with the captured seed and generate.
+    effolkronium::random_local rng;
+    rng.seed(static_cast<std::mt19937::result_type>(captured_seed));
+    int replayed_value = rng.get(1, 10000);
+
+    REQUIRE(original_value == replayed_value);
+}
+
+TEST_CASE("entity::seed throws on missing key", "[seed][signature]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<string_component>(L"a", L"hi"));
+    auto e = gen.generate();
+
+    REQUIRE_THROWS_AS(e.seed(L"missing"), std::out_of_range);
+}
+
+// ---------------------------------------------------------------------------
+// Entity-level seed
+// ---------------------------------------------------------------------------
+
+TEST_CASE("entity::seed() returns the entity-level seed", "[seed][entity]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
+
+    auto e = gen.generate(42);
+    // Should not throw — every entity has a seed.
+    REQUIRE_NOTHROW(e.seed());
+    REQUIRE(e.seed() != 0);
+}
+
+TEST_CASE("same generation seed produces same entity seed", "[seed][entity]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
+
+    auto e1 = gen.generate(42);
+    auto e2 = gen.generate(42);
+
+    REQUIRE(e1.seed() == e2.seed());
+}
+
+TEST_CASE("different generation seeds produce different entity seeds", "[seed][entity]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
+
+    auto e1 = gen.generate(1);
+    auto e2 = gen.generate(2);
+
+    REQUIRE(e1.seed() != e2.seed());
+}
+
+TEST_CASE("entity seed reproduces all component seeds", "[seed][entity]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<random_int_component>(L"a", 1, 10000))
+       .add(std::make_unique<random_int_component>(L"b", 1, 10000));
+
+    auto e = gen.generate(42);
+
+    // Derive component seeds from the entity seed the same way generate_impl does.
+    std::mt19937 local_engine{static_cast<std::mt19937::result_type>(e.seed())};
+    auto expected_seed_a = static_cast<std::uint64_t>(local_engine());
+    auto expected_seed_b = static_cast<std::uint64_t>(local_engine());
+
+    REQUIRE(e.seed(L"a") == expected_seed_a);
+    REQUIRE(e.seed(L"b") == expected_seed_b);
+}
