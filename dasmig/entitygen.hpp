@@ -225,14 +225,18 @@ class entity
 class eg
 {
   public:
-    // Copy/move constructors can be deleted since they are not going to be
-    // used due to singleton pattern.
-    eg(const eg&) = delete;
-    eg(eg&&) = delete;
-    eg& operator=(const eg&) = delete;
-    eg& operator=(eg&&) = delete;
+    // Default constructor creates an empty generator.
+    eg() = default;
 
-    // Thread safe access to entity generator singleton.
+    // Move-only: components are held via unique_ptr.
+    eg(const eg&) = delete;
+    eg& operator=(const eg&) = delete;
+    eg(eg&&) = default;
+    eg& operator=(eg&&) = default;
+    ~eg() = default;
+
+    // Access the global singleton instance. For multi-threaded use,
+    // prefer creating independent eg instances instead.
     static eg& instance()
     {
         static eg instance;
@@ -355,6 +359,93 @@ class eg
             component_keys.begin(), component_keys.size()}, call_seed);
     }
 
+    // --- Batch generation ------------------------------------------------
+
+    // Generate multiple entities with all registered components.
+    [[nodiscard]] std::vector<entity> generate_batch(std::size_t count)
+    {
+        std::vector<entity> entities;
+        entities.reserve(count);
+
+        auto refs = all_component_refs();
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            entities.push_back(generate_impl(refs, _engine));
+        }
+
+        return entities;
+    }
+
+    // Generate multiple entities with all registered components using a
+    // specific seed. The seed initializes the engine once; successive
+    // entities draw from the same deterministic sequence.
+    [[nodiscard]] std::vector<entity> generate_batch(
+        std::size_t count, std::uint64_t call_seed) const
+    {
+        std::vector<entity> entities;
+        entities.reserve(count);
+
+        auto refs = all_component_refs();
+        std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            entities.push_back(generate_impl(refs, engine));
+        }
+
+        return entities;
+    }
+
+    // --- Component groups ------------------------------------------------
+
+    // Register a named group of component keys for convenient generation.
+    eg& add_group(const std::wstring& group_name,
+                  std::vector<std::wstring> component_keys)
+    {
+        _groups[group_name] = std::move(component_keys);
+        return *this;
+    }
+
+    // Remove a named group.
+    eg& remove_group(const std::wstring& group_name)
+    {
+        _groups.erase(group_name);
+        return *this;
+    }
+
+    // Check if a named group exists.
+    [[nodiscard]] bool has_group(const std::wstring& group_name) const
+    {
+        return _groups.contains(group_name);
+    }
+
+    // Generate an entity using a named group of components.
+    [[nodiscard]] entity generate_group(const std::wstring& group_name)
+    {
+        auto it = _groups.find(group_name);
+        if (it == _groups.end())
+        {
+            throw std::out_of_range("group not found");
+        }
+
+        auto filtered = filter_components(it->second);
+        return generate_impl(filtered, _engine);
+    }
+
+    // Generate an entity using a named group with a specific seed.
+    [[nodiscard]] entity generate_group(const std::wstring& group_name,
+                                        std::uint64_t call_seed) const
+    {
+        auto it = _groups.find(group_name);
+        if (it == _groups.end())
+        {
+            throw std::out_of_range("group not found");
+        }
+
+        auto filtered = filter_components(it->second);
+        std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
+        return generate_impl(filtered, engine);
+    }
+
   private:
     // Component entry: key + owned component pointer.
     using component_entry =
@@ -363,12 +454,6 @@ class eg
     // Reference to a component entry for filtered generation.
     using component_ref =
         std::pair<std::wstring, const component*>;
-
-    // Initialize entity generator with no components.
-    eg() = default;
-
-    // We don't manage any resource, all should gracefully deallocate by itself.
-    ~eg() = default;
 
     // Core generation logic shared by all overloads.
     [[nodiscard]] static entity generate_impl(
@@ -439,6 +524,9 @@ class eg
 
     // Registered components in insertion order.
     std::vector<component_entry> _components;
+
+    // Named groups of component keys.
+    std::map<std::wstring, std::vector<std::wstring>> _groups;
 
     // Internal random engine for the generator.
     std::mt19937 _engine{std::random_device{}()};

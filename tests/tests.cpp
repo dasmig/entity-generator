@@ -238,6 +238,13 @@ struct clear_generator
             gen.remove(k);
         }
         gen.unseed();
+
+        // Remove known groups.
+        for (const auto& g : std::vector<std::wstring>{
+                 L"combat", L"identity", L"nonexistent"})
+        {
+            gen.remove_group(g);
+        }
     }
     ~clear_generator() = default;
 };
@@ -1049,4 +1056,249 @@ TEST_CASE("entity seed reproduces all component seeds", "[seed][entity]")
 
     REQUIRE(e.seed(L"a") == expected_seed_a);
     REQUIRE(e.seed(L"b") == expected_seed_b);
+}
+
+// ---------------------------------------------------------------------------
+// Batch generation
+// ---------------------------------------------------------------------------
+
+TEST_CASE("generate_batch produces correct number of entities", "[batch]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    auto batch = gen.generate_batch(5);
+    REQUIRE(batch.size() == 5);
+
+    for (const auto& e : batch)
+    {
+        REQUIRE(e.has(L"a"));
+    }
+}
+
+TEST_CASE("generate_batch with zero count returns empty vector", "[batch]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    auto batch = gen.generate_batch(0);
+    REQUIRE(batch.empty());
+}
+
+TEST_CASE("generate_batch with seed is deterministic", "[batch][seed]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
+
+    auto b1 = gen.generate_batch(3, 42);
+    auto b2 = gen.generate_batch(3, 42);
+
+    REQUIRE(b1.size() == 3);
+    for (std::size_t i = 0; i < 3; ++i)
+    {
+        REQUIRE(b1[i].get<int>(L"rand") == b2[i].get<int>(L"rand"));
+    }
+}
+
+TEST_CASE("generate_batch entities have distinct seeds", "[batch][seed]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
+
+    auto batch = gen.generate_batch(3, 99);
+    // Each entity in the batch should have a different entity seed.
+    REQUIRE(batch[0].seed() != batch[1].seed());
+    REQUIRE(batch[1].seed() != batch[2].seed());
+}
+
+// ---------------------------------------------------------------------------
+// Component groups
+// ---------------------------------------------------------------------------
+
+TEST_CASE("add_group and has_group", "[group]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    REQUIRE_FALSE(gen.has_group(L"combat"));
+    gen.add_group(L"combat", {L"class", L"level"});
+    REQUIRE(gen.has_group(L"combat"));
+}
+
+TEST_CASE("add_group returns self for fluent chaining", "[group]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    auto& ret = gen.add_group(L"combat", {L"a"});
+    REQUIRE(&ret == &gen);
+}
+
+TEST_CASE("remove_group", "[group]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add_group(L"combat", {L"a"});
+    REQUIRE(gen.has_group(L"combat"));
+    gen.remove_group(L"combat");
+    REQUIRE_FALSE(gen.has_group(L"combat"));
+}
+
+TEST_CASE("remove_group returns self for fluent chaining", "[group]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add_group(L"combat", {L"a"});
+    auto& ret = gen.remove_group(L"combat");
+    REQUIRE(&ret == &gen);
+}
+
+TEST_CASE("generate_group produces entity with group keys only", "[group]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<string_component>(L"a", L"alpha"))
+       .add(std::make_unique<string_component>(L"b", L"beta"))
+       .add(std::make_unique<string_component>(L"c", L"gamma"));
+
+    gen.add_group(L"identity", {L"a", L"c"});
+
+    auto e = gen.generate_group(L"identity");
+    REQUIRE(e.has(L"a"));
+    REQUIRE_FALSE(e.has(L"b"));
+    REQUIRE(e.has(L"c"));
+}
+
+TEST_CASE("generate_group with seed is deterministic", "[group][seed]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000))
+       .add(std::make_unique<string_component>(L"name", L"X"));
+
+    gen.add_group(L"combat", {L"rand"});
+
+    auto e1 = gen.generate_group(L"combat", 42);
+    auto e2 = gen.generate_group(L"combat", 42);
+
+    REQUIRE(e1.get<int>(L"rand") == e2.get<int>(L"rand"));
+}
+
+TEST_CASE("generate_group throws on unknown group", "[group]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    REQUIRE_THROWS_AS(gen.generate_group(L"nonexistent"), std::out_of_range);
+}
+
+TEST_CASE("generate_group with seed throws on unknown group", "[group]")
+{
+    clear_generator guard;
+    auto& gen = dasmig::eg::instance();
+
+    REQUIRE_THROWS_AS(gen.generate_group(L"nonexistent", 42), std::out_of_range);
+}
+
+// ---------------------------------------------------------------------------
+// Independent instances
+// ---------------------------------------------------------------------------
+
+TEST_CASE("eg can be default constructed", "[instance]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"hello"));
+
+    auto e = gen.generate();
+    REQUIRE(e.has(L"a"));
+    REQUIRE(e.get<std::wstring>(L"a") == L"hello");
+}
+
+TEST_CASE("independent instances do not share state", "[instance]")
+{
+    dasmig::eg gen1;
+    dasmig::eg gen2;
+
+    gen1.add(std::make_unique<string_component>(L"a", L"from_gen1"));
+    gen2.add(std::make_unique<string_component>(L"b", L"from_gen2"));
+
+    auto e1 = gen1.generate();
+    auto e2 = gen2.generate();
+
+    REQUIRE(e1.has(L"a"));
+    REQUIRE_FALSE(e1.has(L"b"));
+    REQUIRE(e2.has(L"b"));
+    REQUIRE_FALSE(e2.has(L"a"));
+}
+
+TEST_CASE("independent instance does not affect singleton", "[instance]")
+{
+    clear_generator guard;
+
+    dasmig::eg local;
+    local.add(std::make_unique<string_component>(L"a", L"local"));
+
+    REQUIRE_FALSE(dasmig::eg::instance().has(L"a"));
+    REQUIRE(local.has(L"a"));
+}
+
+TEST_CASE("eg can be move constructed", "[instance]")
+{
+    dasmig::eg gen1;
+    gen1.add(std::make_unique<string_component>(L"a", L"hello"));
+
+    dasmig::eg gen2 = std::move(gen1);
+
+    auto e = gen2.generate();
+    REQUIRE(e.has(L"a"));
+    REQUIRE(e.get<std::wstring>(L"a") == L"hello");
+}
+
+TEST_CASE("independent instance with seed is deterministic", "[instance][seed]")
+{
+    dasmig::eg gen1;
+    gen1.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
+    gen1.seed(42);
+
+    dasmig::eg gen2;
+    gen2.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
+    gen2.seed(42);
+
+    auto e1 = gen1.generate();
+    auto e2 = gen2.generate();
+
+    REQUIRE(e1.get<int>(L"rand") == e2.get<int>(L"rand"));
+}
+
+TEST_CASE("independent instance supports groups", "[instance][group]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"alpha"))
+       .add(std::make_unique<string_component>(L"b", L"beta"));
+
+    gen.add_group(L"identity", {L"a"});
+    auto e = gen.generate_group(L"identity");
+
+    REQUIRE(e.has(L"a"));
+    REQUIRE_FALSE(e.has(L"b"));
+}
+
+TEST_CASE("independent instance supports batch", "[instance][batch]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    auto batch = gen.generate_batch(3);
+    REQUIRE(batch.size() == 3);
 }

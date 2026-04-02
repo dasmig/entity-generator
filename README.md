@@ -32,6 +32,12 @@ The library currently supports the following:
 
 - **Seed Signatures**. Every generated entity and component stores the random seed used to produce it, enabling replay and debugging.
 
+- **Batch Generation**. Generate multiple entities in a single call with `generate_batch(count)`.
+
+- **Component Groups**. Define named groups of components for convenient selective generation.
+
+- **Thread Safety**. Create independent `eg` instances for lock-free concurrent generation.
+
 - **Fluent Registration**. Chain `add()` and `remove()` calls to configure the generator.
 
 - **Composable**. Components can internally use [name-generator](https://github.com/dasmig/name-generator) and [nickname-generator](https://github.com/dasmig/nickname-generator) or any other logic.
@@ -270,3 +276,69 @@ generation seed (per-call or generator-level)
             ├─ component B seed   ← entity.seed(L"B")
             └─ ...
 ```
+
+### Batch Generation
+
+Generate multiple entities in a single call:
+
+```cpp
+// Generate 10 entities with all registered components.
+auto batch = eg::instance().generate_batch(10);
+
+for (const auto& e : batch)
+{
+    std::wcout << e << L'\n';
+}
+
+// Seeded batch for deterministic results.
+auto seeded_batch = eg::instance().generate_batch(10, 42);
+```
+
+### Component Groups
+
+Define named groups of component keys for convenient selective generation:
+
+```cpp
+// Register components.
+eg::instance()
+    .add(std::make_unique<character_name>())
+    .add(std::make_unique<character_class>())
+    .add(std::make_unique<age>())
+    .add(std::make_unique<level>())
+    .add(std::make_unique<character_stats>());
+
+// Define groups.
+eg::instance()
+    .add_group(L"identity", {L"name", L"class"})
+    .add_group(L"combat", {L"class", L"level", L"stats"});
+
+// Generate using a group.
+auto fighter = eg::instance().generate_group(L"combat");
+
+// Seeded group generation.
+auto seeded = eg::instance().generate_group(L"combat", 42);
+
+// Check and remove groups.
+if (eg::instance().has_group(L"identity")) { /* ... */ }
+eg::instance().remove_group(L"identity");
+```
+
+### Thread Safety
+
+The `eg` class supports independent instances. Create one per thread for lock-free concurrent generation:
+
+```cpp
+// Each thread gets its own generator — no locks needed.
+std::vector<std::jthread> threads;
+for (int i = 0; i < 4; ++i)
+{
+    threads.emplace_back([&](int id) {
+        dasmig::eg gen;
+        gen.add(std::make_unique<name>(/* … */));
+        gen.seed(id);
+        auto e = gen.generate();
+    }, i);
+}
+```
+
+`eg` is move-constructible and move-assignable, so instances can be transferred between scopes. The `instance()` singleton is still available for single-threaded convenience.
