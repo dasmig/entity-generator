@@ -9,10 +9,10 @@
 #include <iterator>
 #include <map>
 #include <memory>
-#include <optional>
 #include <ostream>
 #include <ranges>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
@@ -85,6 +85,13 @@ class component
     // always included; 0.5 means included roughly half the time. The generator
     // may override this value per-component at registration time.
     [[nodiscard]] virtual double weight() const { return 1.0; }
+
+    // Validate a generated value. Return true to accept, false to retry.
+    // Called automatically during generation. Default always accepts.
+    [[nodiscard]] virtual bool validate(const std::any& /*value*/) const
+    {
+        return true;
+    }
 
   protected:
     // Default conversion covering common standard types. Derived classes can
@@ -173,15 +180,29 @@ class entity
         return result;
     }
 
-    // Operator ostream streaming all component values in generation order.
-    friend std::wostream& operator<<(std::wostream& wos, const entity& entity)
+    // Convert all component values to a single formatted string.
+    // Each entry is rendered as "key: display" separated by "  ".
+    [[nodiscard]] std::wstring to_string() const
     {
-        for (const auto& e : entity._entries)
+        std::wstring result;
+
+        for (const auto& e : _entries)
         {
-            wos << e.key << L": " << e.display << L"  ";
+            if (!result.empty())
+            {
+                result += L"  ";
+            }
+
+            result += e.key + L": " + e.display;
         }
 
-        return wos;
+        return result;
+    }
+
+    // Operator ostream streaming all component values in generation order.
+    friend std::wostream& operator<<(std::wostream& wos, const entity& e)
+    {
+        return wos << e.to_string();
     }
 
   private:
@@ -326,12 +347,40 @@ class eg
         return *this;
     }
 
+    // --- Validation ------------------------------------------------------
+
+    // Set an entity-level validation function. After each entity is fully
+    // generated, the validator is called. If it returns false, the entity
+    // is re-generated up to max_retries additional times.
+    eg& set_validator(std::function<bool(const entity&)> fn)
+    {
+        _validator = std::move(fn);
+        return *this;
+    }
+
+    // Remove the entity-level validation function.
+    eg& clear_validator()
+    {
+        _validator = nullptr;
+        return *this;
+    }
+
+    // Set the maximum number of retries for both component-level and
+    // entity-level validation (default 10).
+    eg& max_retries(std::size_t retries)
+    {
+        _max_retries = retries;
+        return *this;
+    }
+
     // Generate an entity with all registered components using the
     // generator's internal engine.
     [[nodiscard]] entity generate()
     {
         auto refs = all_component_refs();
-        return generate_impl(refs, _engine);
+        return with_entity_validation([&] {
+            return generate_impl(refs, _engine, _max_retries);
+        });
     }
 
     // Generate an entity with all registered components using a specific
@@ -340,7 +389,9 @@ class eg
     {
         auto refs = all_component_refs();
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
-        return generate_impl(refs, engine);
+        return with_entity_validation([&] {
+            return generate_impl(refs, engine, _max_retries);
+        });
     }
 
     // Generate an entity with only the specified components using the
@@ -351,7 +402,9 @@ class eg
     [[nodiscard]] entity generate(std::span<const std::wstring> component_keys)
     {
         auto filtered = filter_components(component_keys);
-        return generate_impl(filtered, _engine);
+        return with_entity_validation([&] {
+            return generate_impl(filtered, _engine, _max_retries);
+        });
     }
 
     // Generate an entity with only the specified components using a specific
@@ -364,7 +417,9 @@ class eg
     {
         auto filtered = filter_components(component_keys);
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
-        return generate_impl(filtered, engine);
+        return with_entity_validation([&] {
+            return generate_impl(filtered, engine, _max_retries);
+        });
     }
 
     // Overload accepting an initializer list for convenience.
@@ -394,7 +449,11 @@ class eg
 
         auto refs = all_component_refs();
         std::generate_n(std::back_inserter(entities), count,
-            [&] { return generate_impl(refs, _engine); });
+            [&] {
+                return with_entity_validation([&] {
+                    return generate_impl(refs, _engine, _max_retries);
+                });
+            });
 
         return entities;
     }
@@ -411,7 +470,11 @@ class eg
         auto refs = all_component_refs();
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
         std::generate_n(std::back_inserter(entities), count,
-            [&] { return generate_impl(refs, engine); });
+            [&] {
+                return with_entity_validation([&] {
+                    return generate_impl(refs, engine, _max_retries);
+                });
+            });
 
         return entities;
     }
@@ -449,7 +512,9 @@ class eg
         }
 
         auto filtered = filter_components(it->second);
-        return generate_impl(filtered, _engine);
+        return with_entity_validation([&] {
+            return generate_impl(filtered, _engine, _max_retries);
+        });
     }
 
     // Generate an entity using a named group with a specific seed.
@@ -464,7 +529,9 @@ class eg
 
         auto filtered = filter_components(it->second);
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
-        return generate_impl(filtered, engine);
+        return with_entity_validation([&] {
+            return generate_impl(filtered, engine, _max_retries);
+        });
     }
 
   private:
@@ -482,7 +549,8 @@ class eg
 
     // Core generation logic shared by all overloads.
     [[nodiscard]] static entity generate_impl(
-        std::span<const component_ref> components, std::mt19937& engine)
+        std::span<const component_ref> components, std::mt19937& engine,
+        std::size_t max_retries)
     {
         entity generated_entity;
         generation_context ctx;
@@ -510,8 +578,25 @@ class eg
             }
 
             ctx._random.seed(static_cast<std::mt19937::result_type>(component_seed));
-
             auto value = ref.comp.get().generate(ctx);
+
+            // Component-level validation with retries.
+            for (std::size_t retry = 0;
+                 retry < max_retries && !ref.comp.get().validate(value);
+                 ++retry)
+            {
+                component_seed = static_cast<std::uint64_t>(local_engine());
+                ctx._random.seed(
+                    static_cast<std::mt19937::result_type>(component_seed));
+                value = ref.comp.get().generate(ctx);
+            }
+
+            if (!ref.comp.get().validate(value))
+            {
+                throw std::runtime_error(
+                    "component validation failed after max retries");
+            }
+
             auto display = ref.comp.get().to_string(value);
 
             ctx._values[ref.key] = value;
@@ -522,6 +607,20 @@ class eg
         }
 
         return generated_entity;
+    }
+
+    // Apply entity-level validation with retries.
+    template <typename GenFn>
+    [[nodiscard]] entity with_entity_validation(GenFn&& fn) const
+    {
+        for (std::size_t attempt = 0; attempt <= _max_retries; ++attempt)
+        {
+            auto e = fn();
+            if (!_validator || _validator(e)) return e;
+        }
+
+        throw std::runtime_error(
+            "entity validation failed after max retries");
     }
 
     // Build a component_ref span from the owned component entries.
@@ -573,6 +672,12 @@ class eg
 
     // Per-component weight overrides (key -> weight).
     std::map<std::wstring, double> _weight_overrides;
+
+    // Entity-level validation function (optional).
+    std::function<bool(const entity&)> _validator;
+
+    // Maximum retries for component and entity validation.
+    std::size_t _max_retries{10};
 
     // Internal random engine for the generator.
     std::mt19937 _engine{std::random_device{}()};

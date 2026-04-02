@@ -220,5 +220,32 @@ int main()
     std::wcout << L"\n--- Greeting without name (safe fallback) ---\n";
     std::wcout << dasmig::eg::instance().generate({L"greeting"}) << L'\n';
 
+    // Entity to_string().
+    std::wcout << L"\n--- Entity to_string ---\n";
+    std::wcout << dasmig::eg::instance().generate().to_string() << L'\n';
+
+    // Batch generation.
+    std::wcout << L"\n--- Batch generation (3 entities) ---\n";
+    auto batch = dasmig::eg::instance().generate_batch(3);
+    for (const auto& e : batch)
+    {
+        std::wcout << e << L'\n';
+    }
+
+    // Component groups.
+    std::wcout << L"\n--- Component groups ---\n";
+    dasmig::eg::instance().add_group(L"identity", {L"name", L"class"});
+    std::wcout << dasmig::eg::instance().generate_group(L"identity") << L'\n';
+    dasmig::eg::instance().remove_group(L"identity");
+
+    // Entity validation: only accept entities where age > 30.
+    std::wcout << L"\n--- Entity validation (age > 30) ---\n";
+    dasmig::eg::instance().set_validator([](const dasmig::entity& e) {
+        return e.get<int>(L"age") > 30;
+    });
+    auto validated = dasmig::eg::instance().generate();
+    std::wcout << L"Age: " << validated.get<int>(L"age") << L'\n';
+    dasmig::eg::instance().clear_validator();
+
     return 0;
 }

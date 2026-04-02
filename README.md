@@ -31,6 +31,10 @@ The library currently supports the following:
 
 - **Component Weights**. Assign inclusion probabilities to components. A weight of `1.0` (default) means always included; `0.5` means included roughly half the time. Weights can be defined in the component interface or overridden per-component at registration time.
 
+- **Entity Serialization**. Convert entities to a formatted string via `entity.to_string()`, which assembles each component's display value.
+
+- **Validation Hooks**. Per-component `validate()` method and entity-level validator callback with configurable retry limits.
+
 - **Thread Safety**. Create independent `eg` instances for lock-free concurrent generation.
 
 - **Fluent Registration**. Chain `add()` and `remove()` calls to configure the generator.
@@ -343,13 +347,13 @@ for (int i = 0; i < 4; ++i)
 Components can declare an inclusion weight via the `weight()` virtual method (default `1.0`). Values range from `0.0` (never included) to `1.0` (always included). The generator rolls against the weight during generation; components that fail the roll are skipped.
 
 ```cpp
-class rare_trait : public component
+class rare_trait : public dasmig::component
 {
   public:
     std::wstring key() const override { return L"rare_trait"; }
     double weight() const override { return 0.2; } // 20% chance
 
-    std::any generate(const generation_context& ctx) const override
+    std::any generate(const dasmig::generation_context& ctx) const override
     {
         return ctx.random().get<std::wstring>({L"scar", L"tattoo", L"birthmark"});
     }
@@ -372,3 +376,62 @@ eg::instance().weight(L"rare_trait", 0.8);
 ```
 
 **Note:** When a weighted component is skipped, dependent components that call `ctx.get<T>()` for it will throw. Use `ctx.has()` to guard dependency access in weight-sensitive components.
+
+### Entity Serialization
+
+Convert an entity to a formatted string with `to_string()`. Each component is rendered as `"key: display"` separated by two spaces. The output matches `operator<<`.
+
+```cpp
+auto entity = eg::instance().generate();
+
+// Get the formatted string.
+std::wstring text = entity.to_string();
+// e.g. "name: Alice  class: Mage  age: 34"
+
+// Equivalent to streaming:
+std::wcout << entity << L'\n';
+```
+
+### Validation Hooks
+
+Validation operates at two levels, both opt-in with zero-cost defaults.
+
+**Component-level:** Override `validate()` on your component. If it returns `false`, the generator re-rolls with a new seed up to `max_retries` times, then throws `std::runtime_error`.
+
+```cpp
+class even_age : public dasmig::component
+{
+  public:
+    std::wstring key() const override { return L"age"; }
+    std::any generate(const dasmig::generation_context& ctx) const override
+    {
+        return ctx.random().get(18, 65);
+    }
+    bool validate(const std::any& value) const override
+    {
+        return std::any_cast<int>(value) % 2 == 0;
+    }
+    std::wstring to_string(const std::any& value) const override
+    {
+        return default_to_string(value);
+    }
+};
+```
+
+**Entity-level:** Set a callback on the generator. If it returns `false`, the entire entity is re-generated up to `max_retries` additional times.
+
+```cpp
+eg::instance().set_validator([](const dasmig::entity& e) {
+    return e.get<int>(L"age") > 30;
+});
+
+auto e = eg::instance().generate(); // age is guaranteed > 30
+
+eg::instance().clear_validator(); // remove the validator
+```
+
+Configure the retry limit (default 10) for both levels:
+
+```cpp
+eg::instance().max_retries(20);
+```

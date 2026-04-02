@@ -245,6 +245,58 @@ class weighted_component : public dasmig::component
     double _weight;
 };
 
+// Component that always fails validation.
+class always_invalid_component : public dasmig::component
+{
+  public:
+    explicit always_invalid_component(std::wstring key)
+        : _key{std::move(key)} {}
+
+    [[nodiscard]] std::wstring key() const override { return _key; }
+
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& ctx) const override
+    {
+        return ctx.random().get(1, 100);
+    }
+
+    [[nodiscard]] bool validate(const std::any& /*value*/) const override
+    {
+        return false;
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        return default_to_string(value);
+    }
+
+  private:
+    std::wstring _key;
+};
+
+// Component that only accepts even values.
+class even_only_component : public dasmig::component
+{
+  public:
+    [[nodiscard]] std::wstring key() const override { return L"even"; }
+
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& ctx) const override
+    {
+        return ctx.random().get(1, 1000);
+    }
+
+    [[nodiscard]] bool validate(const std::any& value) const override
+    {
+        return std::any_cast<int>(value) % 2 == 0;
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        return default_to_string(value);
+    }
+};
+
 // ---------------------------------------------------------------------------
 // Helper: clear all components from the singleton between tests.
 // ---------------------------------------------------------------------------
@@ -259,11 +311,13 @@ struct clear_generator
         for (const auto& k : std::vector<std::wstring>{
                  L"a", L"b", L"c", L"name", L"age", L"greeting", L"pos",
                  L"rand", L"level", L"doubled", L"scaled", L"chain",
-                 L"probe", L"later"})
+                 L"probe", L"later", L"even"})
         {
             gen.remove(k);
         }
         gen.unseed();
+        gen.clear_validator();
+        gen.max_retries(10);
 
         // Remove known groups.
         for (const auto& g : std::vector<std::wstring>{
@@ -1500,4 +1554,192 @@ TEST_CASE("weight applies in batch generation", "[weight][batch]")
     {
         REQUIRE_FALSE(e.has(L"a"));
     }
+}
+
+// ---------------------------------------------------------------------------
+// entity::to_string
+// ---------------------------------------------------------------------------
+
+TEST_CASE("entity::to_string with single component", "[entity][to_string]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"name", L"Alice"));
+
+    auto e = gen.generate();
+    REQUIRE(e.to_string() == L"name: Alice");
+}
+
+TEST_CASE("entity::to_string with multiple components", "[entity][to_string]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"alpha"))
+       .add(std::make_unique<int_component>(L"b", 42));
+
+    auto e = gen.generate();
+    REQUIRE(e.to_string() == L"a: alpha  b: 42");
+}
+
+TEST_CASE("entity::to_string on empty entity", "[entity][to_string]")
+{
+    dasmig::eg gen;
+    auto e = gen.generate();
+    REQUIRE(e.to_string().empty());
+}
+
+TEST_CASE("operator<< produces same output as to_string", "[entity][to_string]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"name", L"Bob"))
+       .add(std::make_unique<int_component>(L"age", 25));
+
+    auto e = gen.generate();
+    std::wostringstream wos;
+    wos << e;
+    REQUIRE(wos.str() == e.to_string());
+}
+
+// ---------------------------------------------------------------------------
+// Component-level validation
+// ---------------------------------------------------------------------------
+
+TEST_CASE("default validate always accepts", "[validation]")
+{
+    string_component comp(L"a", L"val");
+    REQUIRE(comp.validate(std::any{std::wstring{L"val"}}));
+}
+
+TEST_CASE("component validate rejects and retries", "[validation]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<even_only_component>());
+
+    // With retries, the generator should eventually produce an even value.
+    auto e = gen.generate();
+    REQUIRE(e.get<int>(L"even") % 2 == 0);
+}
+
+TEST_CASE("component validate throws after max retries", "[validation]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<always_invalid_component>(L"a"));
+    gen.max_retries(3);
+
+    REQUIRE_THROWS_AS(gen.generate(), std::runtime_error);
+}
+
+TEST_CASE("component validate with seeded generation", "[validation][seed]")
+{
+    dasmig::eg gen1;
+    gen1.add(std::make_unique<even_only_component>());
+
+    dasmig::eg gen2;
+    gen2.add(std::make_unique<even_only_component>());
+
+    auto e1 = gen1.generate(42);
+    auto e2 = gen2.generate(42);
+
+    REQUIRE(e1.get<int>(L"even") == e2.get<int>(L"even"));
+    REQUIRE(e1.get<int>(L"even") % 2 == 0);
+}
+
+// ---------------------------------------------------------------------------
+// Entity-level validation
+// ---------------------------------------------------------------------------
+
+TEST_CASE("set_validator returns self for fluent chaining", "[validation]")
+{
+    dasmig::eg gen;
+    auto& ret = gen.set_validator([](const dasmig::entity&) { return true; });
+    REQUIRE(&ret == &gen);
+}
+
+TEST_CASE("clear_validator returns self for fluent chaining", "[validation]")
+{
+    dasmig::eg gen;
+    auto& ret = gen.clear_validator();
+    REQUIRE(&ret == &gen);
+}
+
+TEST_CASE("max_retries returns self for fluent chaining", "[validation]")
+{
+    dasmig::eg gen;
+    auto& ret = gen.max_retries(5);
+    REQUIRE(&ret == &gen);
+}
+
+TEST_CASE("entity validator accepts valid entity", "[validation][entity]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<int_component>(L"age", 25));
+    gen.set_validator([](const dasmig::entity& e) {
+        return e.get<int>(L"age") > 0;
+    });
+
+    auto e = gen.generate();
+    REQUIRE(e.get<int>(L"age") == 25);
+}
+
+TEST_CASE("entity validator retries until valid", "[validation][entity]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 100));
+    gen.set_validator([](const dasmig::entity& e) {
+        return e.get<int>(L"rand") > 50;
+    });
+    gen.max_retries(100);
+
+    auto e = gen.generate();
+    REQUIRE(e.get<int>(L"rand") > 50);
+}
+
+TEST_CASE("entity validator throws after max retries", "[validation][entity]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    gen.set_validator([](const dasmig::entity&) { return false; });
+    gen.max_retries(3);
+
+    REQUIRE_THROWS_AS(gen.generate(), std::runtime_error);
+}
+
+TEST_CASE("clear_validator removes validation", "[validation][entity]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    gen.set_validator([](const dasmig::entity&) { return false; });
+    gen.clear_validator();
+
+    // After clearing, generation should succeed.
+    REQUIRE_NOTHROW(gen.generate());
+}
+
+TEST_CASE("entity validator applies to batch generation", "[validation][entity][batch]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 100));
+    gen.set_validator([](const dasmig::entity& e) {
+        return e.get<int>(L"rand") > 10;
+    });
+    gen.max_retries(100);
+
+    auto batch = gen.generate_batch(5);
+    for (const auto& e : batch)
+    {
+        REQUIRE(e.get<int>(L"rand") > 10);
+    }
+}
+
+TEST_CASE("entity validator applies to group generation", "[validation][entity][group]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 100))
+       .add(std::make_unique<string_component>(L"name", L"X"));
+    gen.add_group(L"grp", {L"rand"});
+    gen.set_validator([](const dasmig::entity& e) {
+        return e.get<int>(L"rand") > 10;
+    });
+    gen.max_retries(100);
+
+    auto e = gen.generate_group(L"grp");
+    REQUIRE(e.get<int>(L"rand") > 10);
 }
