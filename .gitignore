@@ -1,0 +1,12 @@
+# Build output
+build/
+*.o
+*.exe
+
+# IDE / editor
+.vscode/
+
+# OS
+Thumbs.db
+Desktop.ini
+.DS_Store
