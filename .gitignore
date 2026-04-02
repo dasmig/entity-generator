@@ -3,6 +3,11 @@ build/
 *.o
 *.exe
 
+# Coverage
+coverage/
+*.profraw
+*.profdata
+
 # IDE / editor
 .vscode/
 
