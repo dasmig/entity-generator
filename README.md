@@ -36,6 +36,8 @@ The library currently supports the following:
 
 - **Component Groups**. Define named groups of components for convenient selective generation.
 
+- **Component Weights**. Assign inclusion probabilities to components. A weight of `1.0` (default) means always included; `0.5` means included roughly half the time. Weights can be defined in the component interface or overridden per-component at registration time.
+
 - **Thread Safety**. Create independent `eg` instances for lock-free concurrent generation.
 
 - **Fluent Registration**. Chain `add()` and `remove()` calls to configure the generator.
@@ -342,3 +344,38 @@ for (int i = 0; i < 4; ++i)
 ```
 
 `eg` is move-constructible and move-assignable, so instances can be transferred between scopes. The `instance()` singleton is still available for single-threaded convenience.
+
+### Component Weights
+
+Components can declare an inclusion weight via the `weight()` virtual method (default `1.0`). Values range from `0.0` (never included) to `1.0` (always included). The generator rolls against the weight during generation; components that fail the roll are skipped.
+
+```cpp
+class rare_trait : public component
+{
+  public:
+    std::wstring key() const override { return L"rare_trait"; }
+    double weight() const override { return 0.2; } // 20% chance
+
+    std::any generate(const generation_context& ctx) const override
+    {
+        return ctx.random().get<std::wstring>({L"scar", L"tattoo", L"birthmark"});
+    }
+
+    std::wstring to_string(const std::any& value) const override
+    {
+        return default_to_string(value);
+    }
+};
+```
+
+Weights can also be overridden at registration time or updated later, taking precedence over the component's own `weight()` method:
+
+```cpp
+// Override weight at registration.
+eg::instance().add(std::make_unique<rare_trait>(), 0.5);
+
+// Update weight after registration.
+eg::instance().weight(L"rare_trait", 0.8);
+```
+
+**Note:** When a weighted component is skipped, dependent components that call `ctx.get<T>()` for it will throw. Use `ctx.has()` to guard dependency access in weight-sensitive components.

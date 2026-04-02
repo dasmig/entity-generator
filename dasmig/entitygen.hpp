@@ -5,8 +5,11 @@
 #include <algorithm>
 #include <any>
 #include <cstdint>
+#include <functional>
+#include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <ranges>
 #include <span>
@@ -77,6 +80,11 @@ class component
     // Convert a generated value to a displayable string. Derived classes must
     // implement this. Use default_to_string() for standard type handling.
     [[nodiscard]] virtual std::wstring to_string(const std::any& value) const = 0;
+
+    // Inclusion weight for this component (0.0 to 1.0). A value of 1.0 means
+    // always included; 0.5 means included roughly half the time. The generator
+    // may override this value per-component at registration time.
+    [[nodiscard]] virtual double weight() const { return 1.0; }
 
   protected:
     // Default conversion covering common standard types. Derived classes can
@@ -161,12 +169,7 @@ class entity
     {
         std::vector<std::wstring> result;
         result.reserve(_entries.size());
-
-        for (const auto& e : _entries)
-        {
-            result.push_back(e.key);
-        }
-
+        std::ranges::transform(_entries, std::back_inserter(result), &entry::key);
         return result;
     }
 
@@ -249,19 +252,40 @@ class eg
     eg& add(std::unique_ptr<component> comp)
     {
         const auto key = comp->key();
+        auto it = std::ranges::find(_components, key, &component_entry::first);
 
-        // Replace if already registered, preserving position.
-        for (auto& [existing_key, existing_comp] : _components)
+        if (it != _components.end())
         {
-            if (existing_key == key)
-            {
-                existing_comp = std::move(comp);
-                return *this;
-            }
+            it->second = std::move(comp);
+        }
+        else
+        {
+            _components.emplace_back(key, std::move(comp));
         }
 
-        _components.emplace_back(key, std::move(comp));
+        return *this;
+    }
 
+    // Register a component with a weight override. The override takes
+    // precedence over the component's own weight() method.
+    eg& add(std::unique_ptr<component> comp, double weight_override)
+    {
+        const auto key = comp->key();
+        add(std::move(comp));
+        _weight_overrides[key] = weight_override;
+        return *this;
+    }
+
+    // Set or update the weight override for an already-registered component.
+    // Throws std::out_of_range if the component is not registered.
+    eg& weight(const std::wstring& component_key, double weight_value)
+    {
+        if (!has(component_key))
+        {
+            throw std::out_of_range("component not found");
+        }
+
+        _weight_overrides[component_key] = weight_value;
         return *this;
     }
 
@@ -271,6 +295,7 @@ class eg
         std::erase_if(_components, [&component_key](const auto& pair) {
             return pair.first == component_key;
         });
+        _weight_overrides.erase(component_key);
 
         return *this;
     }
@@ -368,10 +393,8 @@ class eg
         entities.reserve(count);
 
         auto refs = all_component_refs();
-        for (std::size_t i = 0; i < count; ++i)
-        {
-            entities.push_back(generate_impl(refs, _engine));
-        }
+        std::generate_n(std::back_inserter(entities), count,
+            [&] { return generate_impl(refs, _engine); });
 
         return entities;
     }
@@ -387,10 +410,8 @@ class eg
 
         auto refs = all_component_refs();
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
-        for (std::size_t i = 0; i < count; ++i)
-        {
-            entities.push_back(generate_impl(refs, engine));
-        }
+        std::generate_n(std::back_inserter(entities), count,
+            [&] { return generate_impl(refs, engine); });
 
         return entities;
     }
@@ -452,8 +473,12 @@ class eg
         std::pair<std::wstring, std::unique_ptr<component>>;
 
     // Reference to a component entry for filtered generation.
-    using component_ref =
-        std::pair<std::wstring, const component*>;
+    struct component_ref
+    {
+        std::wstring key;
+        std::reference_wrapper<const component> comp;
+        double effective_weight;
+    };
 
     // Core generation logic shared by all overloads.
     [[nodiscard]] static entity generate_impl(
@@ -468,17 +493,30 @@ class eg
         generated_entity._seed = entity_seed;
         std::mt19937 local_engine{static_cast<std::mt19937::result_type>(entity_seed)};
 
-        for (const auto& [key, comp] : components)
+        for (const auto& ref : components)
         {
             auto component_seed = static_cast<std::uint64_t>(local_engine());
+
+            // Roll against the effective weight. A seed is always consumed
+            // to keep the deterministic sequence stable regardless of which
+            // components are included.
+            if (ref.effective_weight < 1.0)
+            {
+                std::uniform_real_distribution<double> dist(0.0, 1.0);
+                if (dist(local_engine) >= ref.effective_weight)
+                {
+                    continue;
+                }
+            }
+
             ctx._random.seed(static_cast<std::mt19937::result_type>(component_seed));
 
-            auto value = comp->generate(ctx);
-            auto display = comp->to_string(value);
+            auto value = ref.comp.get().generate(ctx);
+            auto display = ref.comp.get().to_string(value);
 
-            ctx._values[key] = value;
+            ctx._values[ref.key] = value;
             generated_entity._entries.push_back(
-                {.key = key, .value = std::move(value),
+                {.key = ref.key, .value = std::move(value),
                  .display = std::move(display),
                  .seed = component_seed});
         }
@@ -491,12 +529,11 @@ class eg
     {
         std::vector<component_ref> refs;
         refs.reserve(_components.size());
-
-        for (const auto& [key, comp] : _components)
-        {
-            refs.emplace_back(key, comp.get());
-        }
-
+        std::ranges::transform(_components, std::back_inserter(refs),
+            [this](const auto& entry) -> component_ref {
+                return {entry.first, std::cref(*entry.second),
+                        effective_weight(entry.first, *entry.second)};
+            });
         return refs;
     }
 
@@ -509,17 +546,23 @@ class eg
 
         for (const auto& [key, comp] : _components)
         {
-            for (const auto& requested_key : component_keys)
+            if (std::ranges::contains(component_keys, key))
             {
-                if (key == requested_key)
-                {
-                    filtered.emplace_back(key, comp.get());
-                    break;
-                }
+                filtered.push_back({key, std::cref(*comp),
+                    effective_weight(key, *comp)});
             }
         }
 
         return filtered;
+    }
+
+    // Resolve the effective weight for a component: override wins, then
+    // the component's own weight() method.
+    [[nodiscard]] double effective_weight(
+        const std::wstring& key, const component& comp) const
+    {
+        auto it = _weight_overrides.find(key);
+        return it != _weight_overrides.end() ? it->second : comp.weight();
     }
 
     // Registered components in insertion order.
@@ -527,6 +570,9 @@ class eg
 
     // Named groups of component keys.
     std::map<std::wstring, std::vector<std::wstring>> _groups;
+
+    // Per-component weight overrides (key -> weight).
+    std::map<std::wstring, double> _weight_overrides;
 
     // Internal random engine for the generator.
     std::mt19937 _engine{std::random_device{}()};

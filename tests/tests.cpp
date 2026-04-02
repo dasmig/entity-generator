@@ -219,6 +219,32 @@ class forward_probe_component : public dasmig::component
     }
 };
 
+// Component with a custom weight via the interface.
+class weighted_component : public dasmig::component
+{
+  public:
+    explicit weighted_component(std::wstring key, double w)
+        : _key{std::move(key)}, _weight{w} {}
+
+    [[nodiscard]] std::wstring key() const override { return _key; }
+    [[nodiscard]] double weight() const override { return _weight; }
+
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& /*ctx*/) const override
+    {
+        return std::wstring{L"weighted"};
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        return default_to_string(value);
+    }
+
+  private:
+    std::wstring _key;
+    double _weight;
+};
+
 // ---------------------------------------------------------------------------
 // Helper: clear all components from the singleton between tests.
 // ---------------------------------------------------------------------------
@@ -1301,4 +1327,177 @@ TEST_CASE("independent instance supports batch", "[instance][batch]")
 
     auto batch = gen.generate_batch(3);
     REQUIRE(batch.size() == 3);
+}
+
+// ---------------------------------------------------------------------------
+// Component weights
+// ---------------------------------------------------------------------------
+
+TEST_CASE("default component weight is 1.0", "[weight]")
+{
+    string_component comp(L"a", L"val");
+    REQUIRE(comp.weight() == 1.0);
+}
+
+TEST_CASE("weighted_component returns custom weight", "[weight]")
+{
+    weighted_component comp(L"a", 0.5);
+    REQUIRE(comp.weight() == 0.5);
+}
+
+TEST_CASE("weight 1.0 always includes component", "[weight]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    // Weight defaults to 1.0, should always be present.
+    for (int i = 0; i < 20; ++i)
+    {
+        auto e = gen.generate();
+        REQUIRE(e.has(L"a"));
+    }
+}
+
+TEST_CASE("weight 0.0 never includes component", "[weight]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<weighted_component>(L"a", 0.0));
+
+    for (int i = 0; i < 20; ++i)
+    {
+        auto e = gen.generate();
+        REQUIRE_FALSE(e.has(L"a"));
+    }
+}
+
+TEST_CASE("weight override via add overload", "[weight]")
+{
+    dasmig::eg gen;
+    // Component's own weight is 1.0, but we override to 0.0.
+    gen.add(std::make_unique<string_component>(L"a", L"val"), 0.0);
+
+    for (int i = 0; i < 20; ++i)
+    {
+        auto e = gen.generate();
+        REQUIRE_FALSE(e.has(L"a"));
+    }
+}
+
+TEST_CASE("weight override via weight method", "[weight]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    gen.weight(L"a", 0.0);
+
+    for (int i = 0; i < 20; ++i)
+    {
+        auto e = gen.generate();
+        REQUIRE_FALSE(e.has(L"a"));
+    }
+}
+
+TEST_CASE("weight method throws for unregistered component", "[weight]")
+{
+    dasmig::eg gen;
+    REQUIRE_THROWS_AS(gen.weight(L"nonexistent", 0.5), std::out_of_range);
+}
+
+TEST_CASE("weight override takes precedence over interface weight", "[weight]")
+{
+    dasmig::eg gen;
+    // Component declares weight 0.0, but we override to 1.0.
+    gen.add(std::make_unique<weighted_component>(L"a", 0.0), 1.0);
+
+    for (int i = 0; i < 20; ++i)
+    {
+        auto e = gen.generate();
+        REQUIRE(e.has(L"a"));
+    }
+}
+
+TEST_CASE("remove clears weight override", "[weight]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"), 0.0);
+    gen.remove(L"a");
+
+    // Re-add without override; the component's own weight (1.0) applies.
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    for (int i = 0; i < 20; ++i)
+    {
+        auto e = gen.generate();
+        REQUIRE(e.has(L"a"));
+    }
+}
+
+TEST_CASE("weighted component with seeded generation is deterministic", "[weight][seed]")
+{
+    dasmig::eg gen1;
+    gen1.add(std::make_unique<weighted_component>(L"a", 0.5))
+        .add(std::make_unique<string_component>(L"b", L"always"));
+
+    dasmig::eg gen2;
+    gen2.add(std::make_unique<weighted_component>(L"a", 0.5))
+        .add(std::make_unique<string_component>(L"b", L"always"));
+
+    auto e1 = gen1.generate(42);
+    auto e2 = gen2.generate(42);
+
+    REQUIRE(e1.has(L"a") == e2.has(L"a"));
+    REQUIRE(e1.has(L"b") == e2.has(L"b"));
+}
+
+TEST_CASE("fractional weight includes component sometimes", "[weight]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<weighted_component>(L"a", 0.5));
+
+    int included = 0;
+    constexpr int trials = 200;
+    for (int i = 0; i < trials; ++i)
+    {
+        auto e = gen.generate();
+        if (e.has(L"a")) ++included;
+    }
+
+    // With weight 0.5 over 200 trials, expect roughly 100 inclusions.
+    // Allow a generous range to avoid flaky tests.
+    REQUIRE(included > 0);
+    REQUIRE(included < trials);
+}
+
+TEST_CASE("weight applies in filtered generation", "[weight]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<weighted_component>(L"a", 0.0))
+       .add(std::make_unique<string_component>(L"b", L"val"));
+
+    auto e = gen.generate({L"a", L"b"});
+    REQUIRE_FALSE(e.has(L"a"));
+    REQUIRE(e.has(L"b"));
+}
+
+TEST_CASE("weight applies in group generation", "[weight][group]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<weighted_component>(L"a", 0.0))
+       .add(std::make_unique<string_component>(L"b", L"val"));
+    gen.add_group(L"grp", {L"a", L"b"});
+
+    auto e = gen.generate_group(L"grp");
+    REQUIRE_FALSE(e.has(L"a"));
+    REQUIRE(e.has(L"b"));
+}
+
+TEST_CASE("weight applies in batch generation", "[weight][batch]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<weighted_component>(L"a", 0.0));
+
+    auto batch = gen.generate_batch(5);
+    for (const auto& e : batch)
+    {
+        REQUIRE_FALSE(e.has(L"a"));
+    }
 }
