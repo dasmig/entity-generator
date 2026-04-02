@@ -297,6 +297,83 @@ class even_only_component : public dasmig::component
     }
 };
 
+// Component that fails validation a fixed number of times before accepting.
+class retry_count_component : public dasmig::component
+{
+  public:
+    explicit retry_count_component(int fail_times) : _fail_times{fail_times} {}
+
+    [[nodiscard]] std::wstring key() const override { return L"retry_comp"; }
+
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& /*ctx*/) const override
+    {
+        return 0;
+    }
+
+    [[nodiscard]] bool validate(const std::any& /*value*/) const override
+    {
+        return ++_validate_count > _fail_times;
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        return default_to_string(value);
+    }
+
+  private:
+    int _fail_times;
+    mutable int _validate_count{0};
+};
+
+// ---------------------------------------------------------------------------
+// Test observer: records lifecycle events for verification.
+// ---------------------------------------------------------------------------
+
+class test_observer : public dasmig::generation_observer
+{
+  public:
+    std::vector<std::wstring> events;
+
+    void on_before_generate() override
+    { events.push_back(L"before_generate"); }
+    void on_after_generate(const dasmig::entity&) override
+    { events.push_back(L"after_generate"); }
+    void on_before_component(const std::wstring& key) override
+    { events.push_back(L"before_component:" + key); }
+    void on_after_component(const std::wstring& key, const std::any&) override
+    { events.push_back(L"after_component:" + key); }
+    void on_before_skip(const std::wstring& key) override
+    { events.push_back(L"before_skip:" + key); }
+    void on_after_skip(const std::wstring& key) override
+    { events.push_back(L"after_skip:" + key); }
+    void on_before_retry(const std::wstring& key, std::size_t attempt) override
+    { events.push_back(L"before_retry:" + key + L":" + std::to_wstring(attempt)); }
+    void on_after_retry(const std::wstring& key, std::size_t attempt,
+                        const std::any&) override
+    { events.push_back(L"after_retry:" + key + L":" + std::to_wstring(attempt)); }
+    void on_before_fail(const std::wstring& key) override
+    { events.push_back(L"before_fail:" + key); }
+    void on_after_fail(const std::wstring& key) override
+    { events.push_back(L"after_fail:" + key); }
+    void on_before_entity_retry(std::size_t attempt) override
+    { events.push_back(L"before_entity_retry:" + std::to_wstring(attempt)); }
+    void on_after_entity_retry(std::size_t attempt) override
+    { events.push_back(L"after_entity_retry:" + std::to_wstring(attempt)); }
+    void on_before_entity_fail() override
+    { events.push_back(L"before_entity_fail"); }
+    void on_after_entity_fail() override
+    { events.push_back(L"after_entity_fail"); }
+    void on_before_add(const std::wstring& key) override
+    { events.push_back(L"before_add:" + key); }
+    void on_after_add(const std::wstring& key) override
+    { events.push_back(L"after_add:" + key); }
+    void on_before_remove(const std::wstring& key) override
+    { events.push_back(L"before_remove:" + key); }
+    void on_after_remove(const std::wstring& key) override
+    { events.push_back(L"after_remove:" + key); }
+};
+
 // ---------------------------------------------------------------------------
 // Helper: clear all components from the singleton between tests.
 // ---------------------------------------------------------------------------
@@ -317,6 +394,7 @@ struct clear_generator
         }
         gen.unseed();
         gen.clear_validator();
+        gen.clear_observer();
         gen.max_retries(10);
 
         // Remove known groups.
@@ -1742,4 +1820,332 @@ TEST_CASE("entity validator applies to group generation", "[validation][entity][
 
     auto e = gen.generate_group(L"grp");
     REQUIRE(e.get<int>(L"rand") > 10);
+}
+
+// ---------------------------------------------------------------------------
+// Observer: API
+// ---------------------------------------------------------------------------
+
+TEST_CASE("set_observer returns self for fluent chaining", "[observer]")
+{
+    dasmig::eg gen;
+    auto& ret = gen.set_observer(std::make_shared<test_observer>());
+    REQUIRE(&ret == &gen);
+}
+
+TEST_CASE("clear_observer returns self for fluent chaining", "[observer]")
+{
+    dasmig::eg gen;
+    auto& ret = gen.clear_observer();
+    REQUIRE(&ret == &gen);
+}
+
+TEST_CASE("no observer does not crash", "[observer]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"hello"));
+    REQUIRE_NOTHROW(gen.generate());
+}
+
+// ---------------------------------------------------------------------------
+// Observer: entity lifecycle
+// ---------------------------------------------------------------------------
+
+TEST_CASE("observer receives before/after generate", "[observer]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    obs->events.clear();
+
+    gen.generate();
+
+    REQUIRE(obs->events.front() == L"before_generate");
+    REQUIRE(obs->events.back() == L"after_generate");
+}
+
+// ---------------------------------------------------------------------------
+// Observer: component lifecycle
+// ---------------------------------------------------------------------------
+
+TEST_CASE("observer receives before/after component in order", "[observer]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<string_component>(L"a", L"1"));
+    gen.add(std::make_unique<string_component>(L"b", L"2"));
+    obs->events.clear();
+
+    gen.generate();
+
+    REQUIRE(obs->events.size() == 6);
+    REQUIRE(obs->events[0] == L"before_generate");
+    REQUIRE(obs->events[1] == L"before_component:a");
+    REQUIRE(obs->events[2] == L"after_component:a");
+    REQUIRE(obs->events[3] == L"before_component:b");
+    REQUIRE(obs->events[4] == L"after_component:b");
+    REQUIRE(obs->events[5] == L"after_generate");
+}
+
+// ---------------------------------------------------------------------------
+// Observer: skip hooks
+// ---------------------------------------------------------------------------
+
+TEST_CASE("observer receives before/after skip on weight exclusion", "[observer][weight]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<string_component>(L"a", L"val"), 0.0);
+    obs->events.clear();
+
+    gen.generate();
+
+    REQUIRE(obs->events[0] == L"before_generate");
+    REQUIRE(obs->events[1] == L"before_skip:a");
+    REQUIRE(obs->events[2] == L"after_skip:a");
+    REQUIRE(obs->events[3] == L"after_generate");
+}
+
+// ---------------------------------------------------------------------------
+// Observer: retry hooks
+// ---------------------------------------------------------------------------
+
+TEST_CASE("observer receives before/after retry on validation retry", "[observer][validation]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<retry_count_component>(2));
+    obs->events.clear();
+
+    gen.generate();
+
+    // retry_count_component fails validation 2 times, producing exactly 2 retries.
+    REQUIRE(obs->events[0] == L"before_generate");
+    REQUIRE(obs->events[1] == L"before_component:retry_comp");
+    REQUIRE(obs->events[2] == L"before_retry:retry_comp:1");
+    REQUIRE(obs->events[3] == L"after_retry:retry_comp:1");
+    REQUIRE(obs->events[4] == L"before_retry:retry_comp:2");
+    REQUIRE(obs->events[5] == L"after_retry:retry_comp:2");
+    REQUIRE(obs->events[6] == L"after_component:retry_comp");
+    REQUIRE(obs->events[7] == L"after_generate");
+}
+
+// ---------------------------------------------------------------------------
+// Observer: component fail hooks
+// ---------------------------------------------------------------------------
+
+TEST_CASE("observer receives before/after fail on validation exhaustion", "[observer][validation]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<always_invalid_component>(L"a"));
+    gen.max_retries(2);
+    obs->events.clear();
+
+    REQUIRE_THROWS_AS(gen.generate(), std::runtime_error);
+
+    // Last two events before the throw: before_fail, after_fail.
+    auto it = std::ranges::find(obs->events, L"before_fail:a");
+    REQUIRE(it != obs->events.end());
+    ++it;
+    REQUIRE(*it == L"after_fail:a");
+}
+
+// ---------------------------------------------------------------------------
+// Observer: entity retry hooks
+// ---------------------------------------------------------------------------
+
+TEST_CASE("observer receives before/after entity retry", "[observer][validation]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    int call_count = 0;
+    gen.set_validator([&call_count](const dasmig::entity&) {
+        return ++call_count > 1;
+    });
+    obs->events.clear();
+
+    gen.generate();
+
+    // Entity validator fails once, then succeeds. Expect 1 entity retry.
+    REQUIRE(std::ranges::count(obs->events, L"before_entity_retry:1") == 1);
+    REQUIRE(std::ranges::count(obs->events, L"after_entity_retry:1") == 1);
+}
+
+// ---------------------------------------------------------------------------
+// Observer: entity fail hooks
+// ---------------------------------------------------------------------------
+
+TEST_CASE("observer receives before/after entity fail", "[observer][validation]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    gen.set_validator([](const dasmig::entity&) { return false; });
+    gen.max_retries(2);
+    obs->events.clear();
+
+    REQUIRE_THROWS_AS(gen.generate(), std::runtime_error);
+
+    auto it = std::ranges::find(obs->events, L"before_entity_fail");
+    REQUIRE(it != obs->events.end());
+    ++it;
+    REQUIRE(*it == L"after_entity_fail");
+}
+
+// ---------------------------------------------------------------------------
+// Observer: registration hooks
+// ---------------------------------------------------------------------------
+
+TEST_CASE("observer receives before/after add on registration", "[observer][registration]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    REQUIRE(obs->events.size() == 2);
+    REQUIRE(obs->events[0] == L"before_add:a");
+    REQUIRE(obs->events[1] == L"after_add:a");
+}
+
+TEST_CASE("observer receives before/after remove on removal", "[observer][registration]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    obs->events.clear();
+
+    gen.remove(L"a");
+
+    REQUIRE(obs->events.size() == 2);
+    REQUIRE(obs->events[0] == L"before_remove:a");
+    REQUIRE(obs->events[1] == L"after_remove:a");
+}
+
+TEST_CASE("weight-override add fires hooks once", "[observer][registration]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+
+    gen.add(std::make_unique<string_component>(L"a", L"val"), 0.5);
+
+    REQUIRE(std::ranges::count(obs->events, L"before_add:a") == 1);
+    REQUIRE(std::ranges::count(obs->events, L"after_add:a") == 1);
+}
+
+// ---------------------------------------------------------------------------
+// Observer: clear_observer stops hooks
+// ---------------------------------------------------------------------------
+
+TEST_CASE("clear_observer stops hooks from firing", "[observer]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    obs->events.clear();
+
+    gen.clear_observer();
+    gen.generate();
+
+    REQUIRE(obs->events.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Observer: seeded, batch, group generation
+// ---------------------------------------------------------------------------
+
+TEST_CASE("observer fires with seeded generation", "[observer][seed]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    obs->events.clear();
+
+    gen.generate(42);
+
+    REQUIRE(obs->events.front() == L"before_generate");
+    REQUIRE(obs->events.back() == L"after_generate");
+}
+
+TEST_CASE("observer fires per entity in batch", "[observer][batch]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    obs->events.clear();
+
+    gen.generate_batch(3);
+
+    REQUIRE(std::ranges::count(obs->events, L"before_generate") == 3);
+    REQUIRE(std::ranges::count(obs->events, L"after_generate") == 3);
+}
+
+TEST_CASE("observer fires with group generation", "[observer][group]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<string_component>(L"a", L"1"))
+       .add(std::make_unique<string_component>(L"b", L"2"));
+    gen.add_group(L"grp", {L"a"});
+    obs->events.clear();
+
+    gen.generate_group(L"grp");
+
+    REQUIRE(obs->events.front() == L"before_generate");
+    REQUIRE(obs->events.back() == L"after_generate");
+    // Only component "a" should appear, not "b".
+    REQUIRE(std::ranges::count(obs->events, L"before_component:a") == 1);
+    REQUIRE(std::ranges::count(obs->events, L"before_component:b") == 0);
+}
+
+TEST_CASE("default observer no-ops cover all hooks", "[observer]")
+{
+    auto obs = std::make_shared<dasmig::generation_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+
+    // Registration + removal hooks (default no-ops).
+    gen.add(std::make_unique<string_component>(L"a", L"val"), 0.0);
+    gen.remove(L"a");
+
+    // Generate + skip + component hooks.
+    gen.add(std::make_unique<string_component>(L"a", L"val"), 0.0);
+    gen.add(std::make_unique<string_component>(L"b", L"val"));
+    gen.generate();
+    gen.remove(L"a");
+    gen.remove(L"b");
+
+    // Retry hooks.
+    gen.add(std::make_unique<retry_count_component>(1));
+    gen.generate();
+    gen.remove(L"retry_comp");
+
+    // Component fail hooks.
+    gen.add(std::make_unique<always_invalid_component>(L"a"));
+    gen.max_retries(1);
+    REQUIRE_THROWS(gen.generate());
+    gen.remove(L"a");
+
+    // Entity retry + entity fail hooks.
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    gen.set_validator([](const dasmig::entity&) { return false; });
+    gen.max_retries(1);
+    REQUIRE_THROWS(gen.generate());
 }

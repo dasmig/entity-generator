@@ -242,6 +242,54 @@ class entity
     friend class eg;
 };
 
+// Observer interface for hooking into generation lifecycle events.
+// Override only the methods you care about; all default to no-ops.
+class generation_observer
+{
+  public:
+    virtual ~generation_observer() = default;
+
+    // Entity lifecycle.
+    virtual void on_before_generate() {}
+    virtual void on_after_generate(const entity& /*e*/) {}
+
+    // Component generation.
+    virtual void on_before_component(const std::wstring& /*key*/) {}
+    virtual void on_after_component(const std::wstring& /*key*/,
+                                    const std::any& /*value*/) {}
+
+    // Component skip (weight roll excluded the component).
+    virtual void on_before_skip(const std::wstring& /*key*/) {}
+    virtual void on_after_skip(const std::wstring& /*key*/) {}
+
+    // Component validation retry (attempt is 1-based).
+    virtual void on_before_retry(const std::wstring& /*key*/,
+                                 std::size_t /*attempt*/) {}
+    virtual void on_after_retry(const std::wstring& /*key*/,
+                                std::size_t /*attempt*/,
+                                const std::any& /*value*/) {}
+
+    // Component validation failure (terminal, precedes exception).
+    virtual void on_before_fail(const std::wstring& /*key*/) {}
+    virtual void on_after_fail(const std::wstring& /*key*/) {}
+
+    // Entity validation retry (attempt is 1-based).
+    virtual void on_before_entity_retry(std::size_t /*attempt*/) {}
+    virtual void on_after_entity_retry(std::size_t /*attempt*/) {}
+
+    // Entity validation failure (terminal, precedes exception).
+    virtual void on_before_entity_fail() {}
+    virtual void on_after_entity_fail() {}
+
+    // Component registration.
+    virtual void on_before_add(const std::wstring& /*key*/) {}
+    virtual void on_after_add(const std::wstring& /*key*/) {}
+
+    // Component removal.
+    virtual void on_before_remove(const std::wstring& /*key*/) {}
+    virtual void on_after_remove(const std::wstring& /*key*/) {}
+};
+
 // The entity generator generates entities with configurable components.
 // Components are registered by implementing the component interface and
 // adding them to the generator. Components are generated in registration
@@ -273,6 +321,8 @@ class eg
     eg& add(std::unique_ptr<component> comp)
     {
         const auto key = comp->key();
+        if (_observer) _observer->on_before_add(key);
+
         auto it = std::ranges::find(_components, key, &component_entry::first);
 
         if (it != _components.end())
@@ -284,6 +334,7 @@ class eg
             _components.emplace_back(key, std::move(comp));
         }
 
+        if (_observer) _observer->on_after_add(key);
         return *this;
     }
 
@@ -313,11 +364,14 @@ class eg
     // Remove a registered component by key.
     eg& remove(const std::wstring& component_key)
     {
+        if (_observer) _observer->on_before_remove(component_key);
+
         std::erase_if(_components, [&component_key](const auto& pair) {
             return pair.first == component_key;
         });
         _weight_overrides.erase(component_key);
 
+        if (_observer) _observer->on_after_remove(component_key);
         return *this;
     }
 
@@ -373,13 +427,29 @@ class eg
         return *this;
     }
 
+    // --- Observer ---------------------------------------------------------
+
+    // Set an observer to receive generation lifecycle callbacks.
+    eg& set_observer(std::shared_ptr<generation_observer> obs)
+    {
+        _observer = std::move(obs);
+        return *this;
+    }
+
+    // Remove the observer.
+    eg& clear_observer()
+    {
+        _observer.reset();
+        return *this;
+    }
+
     // Generate an entity with all registered components using the
     // generator's internal engine.
     [[nodiscard]] entity generate()
     {
         auto refs = all_component_refs();
-        return with_entity_validation([&] {
-            return generate_impl(refs, _engine, _max_retries);
+        return generate_with_hooks([&] {
+            return generate_impl(refs, _engine, _max_retries, _observer.get());
         });
     }
 
@@ -389,8 +459,8 @@ class eg
     {
         auto refs = all_component_refs();
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
-        return with_entity_validation([&] {
-            return generate_impl(refs, engine, _max_retries);
+        return generate_with_hooks([&] {
+            return generate_impl(refs, engine, _max_retries, _observer.get());
         });
     }
 
@@ -402,8 +472,8 @@ class eg
     [[nodiscard]] entity generate(std::span<const std::wstring> component_keys)
     {
         auto filtered = filter_components(component_keys);
-        return with_entity_validation([&] {
-            return generate_impl(filtered, _engine, _max_retries);
+        return generate_with_hooks([&] {
+            return generate_impl(filtered, _engine, _max_retries, _observer.get());
         });
     }
 
@@ -417,8 +487,8 @@ class eg
     {
         auto filtered = filter_components(component_keys);
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
-        return with_entity_validation([&] {
-            return generate_impl(filtered, engine, _max_retries);
+        return generate_with_hooks([&] {
+            return generate_impl(filtered, engine, _max_retries, _observer.get());
         });
     }
 
@@ -450,8 +520,8 @@ class eg
         auto refs = all_component_refs();
         std::generate_n(std::back_inserter(entities), count,
             [&] {
-                return with_entity_validation([&] {
-                    return generate_impl(refs, _engine, _max_retries);
+                return generate_with_hooks([&] {
+                    return generate_impl(refs, _engine, _max_retries, _observer.get());
                 });
             });
 
@@ -471,8 +541,8 @@ class eg
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
         std::generate_n(std::back_inserter(entities), count,
             [&] {
-                return with_entity_validation([&] {
-                    return generate_impl(refs, engine, _max_retries);
+                return generate_with_hooks([&] {
+                    return generate_impl(refs, engine, _max_retries, _observer.get());
                 });
             });
 
@@ -512,8 +582,8 @@ class eg
         }
 
         auto filtered = filter_components(it->second);
-        return with_entity_validation([&] {
-            return generate_impl(filtered, _engine, _max_retries);
+        return generate_with_hooks([&] {
+            return generate_impl(filtered, _engine, _max_retries, _observer.get());
         });
     }
 
@@ -529,8 +599,8 @@ class eg
 
         auto filtered = filter_components(it->second);
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
-        return with_entity_validation([&] {
-            return generate_impl(filtered, engine, _max_retries);
+        return generate_with_hooks([&] {
+            return generate_impl(filtered, engine, _max_retries, _observer.get());
         });
     }
 
@@ -550,7 +620,7 @@ class eg
     // Core generation logic shared by all overloads.
     [[nodiscard]] static entity generate_impl(
         std::span<const component_ref> components, std::mt19937& engine,
-        std::size_t max_retries)
+        std::size_t max_retries, generation_observer* obs)
     {
         entity generated_entity;
         generation_context ctx;
@@ -573,9 +643,16 @@ class eg
                 std::uniform_real_distribution<double> dist(0.0, 1.0);
                 if (dist(local_engine) >= ref.effective_weight)
                 {
+                    if (obs)
+                    {
+                        obs->on_before_skip(ref.key);
+                        obs->on_after_skip(ref.key);
+                    }
                     continue;
                 }
             }
+
+            if (obs) obs->on_before_component(ref.key);
 
             ctx._random.seed(static_cast<std::mt19937::result_type>(component_seed));
             auto value = ref.comp.get().generate(ctx);
@@ -585,19 +662,28 @@ class eg
                  retry < max_retries && !ref.comp.get().validate(value);
                  ++retry)
             {
+                if (obs) obs->on_before_retry(ref.key, retry + 1);
                 component_seed = static_cast<std::uint64_t>(local_engine());
                 ctx._random.seed(
                     static_cast<std::mt19937::result_type>(component_seed));
                 value = ref.comp.get().generate(ctx);
+                if (obs) obs->on_after_retry(ref.key, retry + 1, value);
             }
 
             if (!ref.comp.get().validate(value))
             {
+                if (obs)
+                {
+                    obs->on_before_fail(ref.key);
+                    obs->on_after_fail(ref.key);
+                }
                 throw std::runtime_error(
                     "component validation failed after max retries");
             }
 
             auto display = ref.comp.get().to_string(value);
+
+            if (obs) obs->on_after_component(ref.key, value);
 
             ctx._values[ref.key] = value;
             generated_entity._entries.push_back(
@@ -613,14 +699,34 @@ class eg
     template <typename GenFn>
     [[nodiscard]] entity with_entity_validation(GenFn&& fn) const
     {
+        auto* obs = _observer.get();
+
         for (std::size_t attempt = 0; attempt <= _max_retries; ++attempt)
         {
+            if (attempt > 0 && obs) obs->on_before_entity_retry(attempt);
             auto e = fn();
+            if (attempt > 0 && obs) obs->on_after_entity_retry(attempt);
             if (!_validator || _validator(e)) return e;
         }
 
+        if (obs)
+        {
+            obs->on_before_entity_fail();
+            obs->on_after_entity_fail();
+        }
         throw std::runtime_error(
             "entity validation failed after max retries");
+    }
+
+    // Wrap a generation function with before/after generate hooks.
+    template <typename GenFn>
+    [[nodiscard]] entity generate_with_hooks(GenFn&& fn) const
+    {
+        auto* obs = _observer.get();
+        if (obs) obs->on_before_generate();
+        auto e = with_entity_validation(std::forward<GenFn>(fn));
+        if (obs) obs->on_after_generate(e);
+        return e;
     }
 
     // Build a component_ref span from the owned component entries.
@@ -675,6 +781,9 @@ class eg
 
     // Entity-level validation function (optional).
     std::function<bool(const entity&)> _validator;
+
+    // Generation lifecycle observer (optional).
+    std::shared_ptr<generation_observer> _observer;
 
     // Maximum retries for component and entity validation.
     std::size_t _max_retries{10};

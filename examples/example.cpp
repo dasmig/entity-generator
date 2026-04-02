@@ -247,5 +247,26 @@ int main()
     std::wcout << L"Age: " << validated.get<int>(L"age") << L'\n';
     dasmig::eg::instance().clear_validator();
 
+    // Generation observer: hook into lifecycle events.
+    class log_observer : public dasmig::generation_observer
+    {
+      public:
+        void on_before_generate() override
+        {
+            std::wcout << L"  [observer] generating entity...\n";
+        }
+        void on_after_component(const std::wstring& key,
+                                const std::any& /*value*/) override
+        {
+            std::wcout << L"  [observer] produced " << key << L'\n';
+        }
+    };
+
+    std::wcout << L"\n--- Observer hooks ---\n";
+    dasmig::eg::instance().set_observer(
+        std::make_shared<log_observer>());
+    dasmig::eg::instance().generate({L"name", L"class"});
+    dasmig::eg::instance().clear_observer();
+
     return 0;
 }

@@ -35,6 +35,8 @@ The library currently supports the following:
 
 - **Validation Hooks**. Per-component `validate()` method and entity-level validator callback with configurable retry limits.
 
+- **Event Hooks**. Attach a `generation_observer` to receive before/after callbacks for generation, component production, skips, retries, failures, and registration changes.
+
 - **Thread Safety**. Create independent `eg` instances for lock-free concurrent generation.
 
 - **Fluent Registration**. Chain `add()` and `remove()` calls to configure the generator.
@@ -435,3 +437,43 @@ Configure the retry limit (default 10) for both levels:
 ```cpp
 eg::instance().max_retries(20);
 ```
+
+### Event Hooks
+
+Attach a `generation_observer` to any generator to receive lifecycle callbacks. Override only the hooks you need; all default to no-ops.
+
+```cpp
+class log_observer : public dasmig::generation_observer
+{
+  public:
+    void on_before_generate() override
+    {
+        std::wcout << L"generating entity...\n";
+    }
+    void on_after_component(const std::wstring& key,
+                            const std::any& /*value*/) override
+    {
+        std::wcout << L"produced " << key << L'\n';
+    }
+};
+
+eg::instance().set_observer(std::make_shared<log_observer>());
+eg::instance().generate(); // prints hook messages
+eg::instance().clear_observer();
+```
+
+The full set of hooks (9 before/after pairs, 18 methods):
+
+| Event | Before | After |
+|---|---|---|
+| Entity generation | `on_before_generate()` | `on_after_generate(entity)` |
+| Component generation | `on_before_component(key)` | `on_after_component(key, value)` |
+| Component skip (weight) | `on_before_skip(key)` | `on_after_skip(key)` |
+| Component retry | `on_before_retry(key, attempt)` | `on_after_retry(key, attempt, value)` |
+| Component fail | `on_before_fail(key)` | `on_after_fail(key)` |
+| Entity retry | `on_before_entity_retry(attempt)` | `on_after_entity_retry(attempt)` |
+| Entity fail | `on_before_entity_fail()` | `on_after_entity_fail()` |
+| Registration | `on_before_add(key)` | `on_after_add(key)` |
+| Removal | `on_before_remove(key)` | `on_after_remove(key)` |
+
+For per-component filtering, check the `key` parameter inside your hook override.
