@@ -1,5 +1,4 @@
 #include "../dasmig/entitygen.hpp"
-#include "../dasmig/random.hpp"
 #include <iostream>
 
 // Example component: generates a random character class.
@@ -11,12 +10,13 @@ class character_class : public dasmig::component
         return L"class";
     }
 
-    [[nodiscard]] std::any generate() const override
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& ctx) const override
     {
         static const std::vector<std::wstring> classes{
             L"Warrior", L"Mage", L"Rogue", L"Healer", L"Ranger", L"Paladin"};
 
-        return *effolkronium::random_thread_local::get(classes);
+        return ctx.random().get(classes);
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -34,9 +34,10 @@ class age : public dasmig::component
         return L"age";
     }
 
-    [[nodiscard]] std::any generate() const override
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& ctx) const override
     {
-        return effolkronium::random_thread_local::get(18, 65);
+        return ctx.random().get(18, 65);
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -54,9 +55,10 @@ class level : public dasmig::component
         return L"level";
     }
 
-    [[nodiscard]] std::any generate() const override
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& ctx) const override
     {
-        return effolkronium::random_thread_local::get(1, 100);
+        return ctx.random().get(1, 100);
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -74,7 +76,8 @@ class character_name : public dasmig::component
         return L"name";
     }
 
-    [[nodiscard]] std::any generate() const override
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& ctx) const override
     {
         static const std::vector<std::wstring> names{
             L"Aldric",  L"Branwen", L"Cedric",  L"Dahlia",  L"Eldrin",
@@ -82,7 +85,7 @@ class character_name : public dasmig::component
             L"Kaelen",  L"Lyria",   L"Magnus",  L"Nadia",   L"Orion",
             L"Petra",   L"Quinlan", L"Rosalind"};
 
-        return *effolkronium::random_thread_local::get(names);
+        return ctx.random().get(names);
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -91,37 +94,131 @@ class character_name : public dasmig::component
     }
 };
 
+// Example component: demonstrates safe access to a previously generated
+// component using ctx.has() and ctx.get().
+class greeting : public dasmig::component
+{
+  public:
+    [[nodiscard]] std::wstring key() const override
+    {
+        return L"greeting";
+    }
+
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& ctx) const override
+    {
+        // Guard against selective generation where "name" is absent.
+        if (ctx.has(L"name"))
+        {
+            return L"Hello, " + ctx.get<std::wstring>(L"name") + L"!";
+        }
+
+        return std::wstring{L"Hello, stranger!"};
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        return default_to_string(value);
+    }
+};
+
+// Example component: demonstrates a custom type with to_string() override
+// and dependency on a previously generated component (level).
+struct stats
+{
+    int strength;
+    int agility;
+    int intellect;
+};
+
+class character_stats : public dasmig::component
+{
+  public:
+    [[nodiscard]] std::wstring key() const override
+    {
+        return L"stats";
+    }
+
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& ctx) const override
+    {
+        // Scale stat range based on level: higher level = higher potential.
+        const int max_stat = ctx.has(L"level") ? ctx.get<int>(L"level") / 5 + 3 : 20;
+
+        return stats{
+            .strength  = ctx.random().get(1, max_stat),
+            .agility   = ctx.random().get(1, max_stat),
+            .intellect = ctx.random().get(1, max_stat)};
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        auto s = std::any_cast<stats>(value);
+        return L"STR " + std::to_wstring(s.strength)
+             + L" AGI " + std::to_wstring(s.agility)
+             + L" INT " + std::to_wstring(s.intellect);
+    }
+};
+
 int main()
 {
-    // Register components.
+    // Register components. Order matters: greeting depends on name.
     dasmig::eg::instance()
         .add(std::make_unique<character_name>())
         .add(std::make_unique<character_class>())
         .add(std::make_unique<age>())
-        .add(std::make_unique<level>());
+        .add(std::make_unique<level>())
+        .add(std::make_unique<character_stats>())
+        .add(std::make_unique<greeting>());
 
     // Generate entities with all components.
-    std::wcout << L"--- Full entities ---" << std::endl;
+    std::wcout << L"--- Full entities ---\n";
     for (std::size_t i = 0; i < 5; i++)
     {
-        std::wcout << dasmig::eg::instance().generate() << std::endl;
+        std::wcout << dasmig::eg::instance().generate() << L'\n';
     }
 
     // Generate entities with only specific components.
-    std::wcout << std::endl << L"--- Name and class only ---" << std::endl;
+    std::wcout << L"\n--- Name and class only ---\n";
     for (std::size_t i = 0; i < 5; i++)
     {
         std::wcout << dasmig::eg::instance().generate({L"name", L"class"})
-                   << std::endl;
+                   << L'\n';
     }
 
     // Typed retrieval.
-    std::wcout << std::endl << L"--- Typed access ---" << std::endl;
+    std::wcout << L"\n--- Typed access ---\n";
     auto entity = dasmig::eg::instance().generate();
-    std::wcout << L"Name:  " << entity.get<std::wstring>(L"name") << std::endl;
-    std::wcout << L"Class: " << entity.get<std::wstring>(L"class") << std::endl;
-    std::wcout << L"Age:   " << entity.get<int>(L"age") << std::endl;
-    std::wcout << L"Level: " << entity.get<int>(L"level") << std::endl;
+    std::wcout << L"Name:     " << entity.get<std::wstring>(L"name") << L'\n';
+    std::wcout << L"Class:    " << entity.get<std::wstring>(L"class") << L'\n';
+    std::wcout << L"Age:      " << entity.get<int>(L"age") << L'\n';
+    std::wcout << L"Level:    " << entity.get<int>(L"level") << L'\n';
+    std::wcout << L"Greeting: " << entity.get<std::wstring>(L"greeting") << L'\n';
+
+    // Custom type retrieval.
+    auto s = entity.get<stats>(L"stats");
+    std::wcout << L"Stats:    STR " << s.strength
+               << L" AGI " << s.agility
+               << L" INT " << s.intellect << L'\n';
+
+    // Check if a component exists.
+    std::wcout << L"Has stats? " << (entity.has(L"stats") ? L"yes" : L"no") << L'\n';
+
+    // Reproducible generation with per-call seed.
+    std::wcout << L"\n--- Seeded (same seed = same result) ---\n";
+    std::wcout << dasmig::eg::instance().generate(42) << L'\n';
+    std::wcout << dasmig::eg::instance().generate(42) << L'\n';
+
+    // Generator-level seed for deterministic sequences.
+    std::wcout << L"\n--- Generator seeded sequence ---\n";
+    dasmig::eg::instance().seed(123);
+    std::wcout << dasmig::eg::instance().generate() << L'\n';
+    std::wcout << dasmig::eg::instance().generate() << L'\n';
+    dasmig::eg::instance().unseed();
+
+    // Selective generation with safe dependency (greeting without name).
+    std::wcout << L"\n--- Greeting without name (safe fallback) ---\n";
+    std::wcout << dasmig::eg::instance().generate({L"greeting"}) << L'\n';
 
     return 0;
 }
