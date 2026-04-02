@@ -1,6 +1,6 @@
 # Entity Generator for C++
 
-[![Entity Generator for C++](https://raw.githubusercontent.com/dasmig/entity-generator/master/doc/entity-generator.png)](https://github.com/dasmig/entity-generator/releases)
+[![Entity Generator for C++](https://raw.githubusercontent.com/dasmig/entity-generator/master/docs/entity-generator.png)](https://github.com/dasmig/entity-generator/releases)
 
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/dasmig/entity-generator/main/LICENSE)
 [![GitHub Releases](https://img.shields.io/github/release/dasmig/entity-generator.svg)](https://github.com/dasmig/entity-generator/releases)
