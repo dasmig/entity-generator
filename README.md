@@ -1,10 +1,9 @@
 # Entity Generator for C++
 
-[![Entity Generator for C++](https://raw.githubusercontent.com/dasmig/entity-generator/master/docs/entity-generator.png)](https://github.com/dasmig/entity-generator/releases)
+[![Entity Generator for C++](https://raw.githubusercontent.com/dasmig/entity-generator/master/doc/entity-generator.png)](https://github.com/dasmig/entity-generator/releases)
 
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/dasmig/entity-generator/main/LICENSE)
 [![GitHub Releases](https://img.shields.io/github/release/dasmig/entity-generator.svg)](https://github.com/dasmig/entity-generator/releases)
-[![GitHub Downloads](https://img.shields.io/github/downloads/dasmig/entity-generator/total)](https://github.com/dasmig/entity-generator/releases)
 [![GitHub Issues](https://img.shields.io/github/issues/dasmig/entity-generator.svg)](https://github.com/dasmig/entity-generator/issues)
 
 ## Features
@@ -15,7 +14,7 @@
 
 - **Advanced Generation** — Batch generation, named component groups, selective generation by key subset, component weights for probabilistic inclusion, and conditional components for logic-driven inclusion via `should_generate(ctx)`.
 
-- **Validation & Hooks** — Per-component `validate()` with automatic retries, entity-level validator callbacks, and a `generation_observer` interface with 18 lifecycle hooks (before/after for generation, skip, retry, fail, and registration events).
+- **Validation & Hooks** — Per-component `validate()` with automatic retries, entity-level validator callbacks, and a `generation_observer` interface with 15 lifecycle hooks for generation, skip, retry, fail, and registration events.
 
 - **Serialization** — `entity.to_string()` and `operator<<` render all component display values in generation order.
 

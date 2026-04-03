@@ -404,27 +404,21 @@ class test_observer : public dasmig::generation_observer
     { events.push_back(L"before_component:" + key); }
     void on_after_component(const std::wstring& key, const std::any&) override
     { events.push_back(L"after_component:" + key); }
-    void on_before_skip(const std::wstring& key) override
-    { events.push_back(L"before_skip:" + key); }
-    void on_after_skip(const std::wstring& key) override
-    { events.push_back(L"after_skip:" + key); }
+    void on_skip(const std::wstring& key) override
+    { events.push_back(L"skip:" + key); }
     void on_before_retry(const std::wstring& key, std::size_t attempt) override
     { events.push_back(L"before_retry:" + key + L":" + std::to_wstring(attempt)); }
     void on_after_retry(const std::wstring& key, std::size_t attempt,
                         const std::any&) override
     { events.push_back(L"after_retry:" + key + L":" + std::to_wstring(attempt)); }
-    void on_before_fail(const std::wstring& key) override
-    { events.push_back(L"before_fail:" + key); }
-    void on_after_fail(const std::wstring& key) override
-    { events.push_back(L"after_fail:" + key); }
+    void on_component_fail(const std::wstring& key) override
+    { events.push_back(L"component_fail:" + key); }
     void on_before_entity_retry(std::size_t attempt) override
     { events.push_back(L"before_entity_retry:" + std::to_wstring(attempt)); }
     void on_after_entity_retry(std::size_t attempt) override
     { events.push_back(L"after_entity_retry:" + std::to_wstring(attempt)); }
-    void on_before_entity_fail() override
-    { events.push_back(L"before_entity_fail"); }
-    void on_after_entity_fail() override
-    { events.push_back(L"after_entity_fail"); }
+    void on_entity_fail() override
+    { events.push_back(L"entity_fail"); }
     void on_before_add(const std::wstring& key) override
     { events.push_back(L"before_add:" + key); }
     void on_after_add(const std::wstring& key) override
@@ -1965,9 +1959,8 @@ TEST_CASE("observer receives before/after skip on weight exclusion", "[observer]
     gen.generate();
 
     REQUIRE(obs->events[0] == L"before_generate");
-    REQUIRE(obs->events[1] == L"before_skip:a");
-    REQUIRE(obs->events[2] == L"after_skip:a");
-    REQUIRE(obs->events[3] == L"after_generate");
+    REQUIRE(obs->events[1] == L"skip:a");
+    REQUIRE(obs->events[2] == L"after_generate");
 }
 
 // ---------------------------------------------------------------------------
@@ -1999,7 +1992,7 @@ TEST_CASE("observer receives before/after retry on validation retry", "[observer
 // Observer: component fail hooks
 // ---------------------------------------------------------------------------
 
-TEST_CASE("observer receives before/after fail on validation exhaustion", "[observer][validation]")
+TEST_CASE("observer receives component_fail on validation exhaustion", "[observer][validation]")
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
@@ -2010,11 +2003,8 @@ TEST_CASE("observer receives before/after fail on validation exhaustion", "[obse
 
     REQUIRE_THROWS_AS(gen.generate(), std::runtime_error);
 
-    // Last two events before the throw: before_fail, after_fail.
-    auto it = std::ranges::find(obs->events, L"before_fail:a");
+    auto it = std::ranges::find(obs->events, L"component_fail:a");
     REQUIRE(it != obs->events.end());
-    ++it;
-    REQUIRE(*it == L"after_fail:a");
 }
 
 // ---------------------------------------------------------------------------
@@ -2045,7 +2035,7 @@ TEST_CASE("observer receives before/after entity retry", "[observer][validation]
 // Observer: entity fail hooks
 // ---------------------------------------------------------------------------
 
-TEST_CASE("observer receives before/after entity fail", "[observer][validation]")
+TEST_CASE("observer receives entity_fail on entity validation exhaustion", "[observer][validation]")
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
@@ -2057,10 +2047,8 @@ TEST_CASE("observer receives before/after entity fail", "[observer][validation]"
 
     REQUIRE_THROWS_AS(gen.generate(), std::runtime_error);
 
-    auto it = std::ranges::find(obs->events, L"before_entity_fail");
+    auto it = std::ranges::find(obs->events, L"entity_fail");
     REQUIRE(it != obs->events.end());
-    ++it;
-    REQUIRE(*it == L"after_entity_fail");
 }
 
 // ---------------------------------------------------------------------------
@@ -2265,8 +2253,7 @@ TEST_CASE("conditional skip fires observer hooks", "[conditional][observer]")
 
     gen.generate();
 
-    REQUIRE(std::ranges::count(obs->events, L"before_skip:hidden") == 1);
-    REQUIRE(std::ranges::count(obs->events, L"after_skip:hidden") == 1);
+    REQUIRE(std::ranges::count(obs->events, L"skip:hidden") == 1);
     REQUIRE(std::ranges::count(obs->events, L"before_component:hidden") == 0);
 }
 

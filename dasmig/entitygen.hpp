@@ -267,9 +267,8 @@ class generation_observer
     virtual void on_after_component(const std::wstring& /*key*/,
                                     const std::any& /*value*/) {}
 
-    // Component skip (weight roll excluded the component).
-    virtual void on_before_skip(const std::wstring& /*key*/) {}
-    virtual void on_after_skip(const std::wstring& /*key*/) {}
+    // Component skip (weight roll or conditional exclusion).
+    virtual void on_skip(const std::wstring& /*key*/) {}
 
     // Component validation retry (attempt is 1-based).
     virtual void on_before_retry(const std::wstring& /*key*/,
@@ -279,16 +278,14 @@ class generation_observer
                                 const std::any& /*value*/) {}
 
     // Component validation failure (terminal, precedes exception).
-    virtual void on_before_fail(const std::wstring& /*key*/) {}
-    virtual void on_after_fail(const std::wstring& /*key*/) {}
+    virtual void on_component_fail(const std::wstring& /*key*/) {}
 
     // Entity validation retry (attempt is 1-based).
     virtual void on_before_entity_retry(std::size_t /*attempt*/) {}
     virtual void on_after_entity_retry(std::size_t /*attempt*/) {}
 
     // Entity validation failure (terminal, precedes exception).
-    virtual void on_before_entity_fail() {}
-    virtual void on_after_entity_fail() {}
+    virtual void on_entity_fail() {}
 
     // Component registration.
     virtual void on_before_add(const std::wstring& /*key*/) {}
@@ -658,11 +655,7 @@ class eg
                 std::uniform_real_distribution<double> dist(0.0, 1.0);
                 if (dist(local_engine) >= ref.effective_weight)
                 {
-                    if (obs)
-                    {
-                        obs->on_before_skip(ref.key);
-                        obs->on_after_skip(ref.key);
-                    }
+                    if (obs) obs->on_skip(ref.key);
                     continue;
                 }
             }
@@ -670,11 +663,7 @@ class eg
             // Conditional check: skip if the component opts out based on context.
             if (!ref.comp.get().should_generate(ctx))
             {
-                if (obs)
-                {
-                    obs->on_before_skip(ref.key);
-                    obs->on_after_skip(ref.key);
-                }
+                if (obs) obs->on_skip(ref.key);
                 continue;
             }
 
@@ -698,11 +687,7 @@ class eg
 
             if (!ref.comp.get().validate(value))
             {
-                if (obs)
-                {
-                    obs->on_before_fail(ref.key);
-                    obs->on_after_fail(ref.key);
-                }
+                if (obs) obs->on_component_fail(ref.key);
                 throw std::runtime_error(
                     "component validation failed after max retries");
             }
@@ -737,11 +722,7 @@ class eg
             if (!_validator || _validator(e)) return e;
         }
 
-        if (obs)
-        {
-            obs->on_before_entity_fail();
-            obs->on_after_entity_fail();
-        }
+        if (obs) obs->on_entity_fail();
         throw std::runtime_error(
             "entity validation failed after max retries");
     }

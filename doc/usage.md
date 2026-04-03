@@ -420,19 +420,19 @@ eg::instance().generate(); // prints hook messages
 eg::instance().clear_observer();
 ```
 
-The full set of hooks (9 before/after pairs, 18 methods):
+The full set of hooks (6 before/after pairs + 3 single-fire hooks, 15 methods):
 
-| Event | Before | After |
-|---|---|---|
-| Entity generation | `on_before_generate()` | `on_after_generate(entity)` |
-| Component generation | `on_before_component(key)` | `on_after_component(key, value)` |
-| Component skip (weight) | `on_before_skip(key)` | `on_after_skip(key)` |
-| Component retry | `on_before_retry(key, attempt)` | `on_after_retry(key, attempt, value)` |
-| Component fail | `on_before_fail(key)` | `on_after_fail(key)` |
-| Entity retry | `on_before_entity_retry(attempt)` | `on_after_entity_retry(attempt)` |
-| Entity fail | `on_before_entity_fail()` | `on_after_entity_fail()` |
-| Registration | `on_before_add(key)` | `on_after_add(key)` |
-| Removal | `on_before_remove(key)` | `on_after_remove(key)` |
+| Event | Hook(s) |
+|---|---|
+| Entity generation | `on_before_generate()` / `on_after_generate(entity)` |
+| Component generation | `on_before_component(key)` / `on_after_component(key, value)` |
+| Component skip | `on_skip(key)` |
+| Component retry | `on_before_retry(key, attempt)` / `on_after_retry(key, attempt, value)` |
+| Component fail | `on_component_fail(key)` |
+| Entity retry | `on_before_entity_retry(attempt)` / `on_after_entity_retry(attempt)` |
+| Entity fail | `on_entity_fail()` |
+| Registration | `on_before_add(key)` / `on_after_add(key)` |
+| Removal | `on_before_remove(key)` / `on_after_remove(key)` |
 
 For per-component filtering, check the `key` parameter inside your hook override.
 
