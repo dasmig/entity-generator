@@ -315,6 +315,8 @@ class eg
         return instance;
     }
 
+    // --- Registration ----------------------------------------------------
+
     // Register a component. Takes ownership of the component. If a component
     // with the same key already exists, it will be replaced. Components are
     // generated in the order they are registered.
@@ -383,6 +385,8 @@ class eg
         });
     }
 
+    // --- Seeding ---------------------------------------------------------
+
     // Seed the internal random engine. Subsequent generate() calls without
     // an explicit seed will draw from this seeded sequence.
     eg& seed(std::uint64_t seed_value)
@@ -442,6 +446,8 @@ class eg
         _observer.reset();
         return *this;
     }
+
+    // --- Generation ------------------------------------------------------
 
     // Generate an entity with all registered components using the
     // generator's internal engine.
@@ -695,6 +701,8 @@ class eg
         return generated_entity;
     }
 
+    // --- Generation helpers -----------------------------------------------
+
     // Apply entity-level validation with retries.
     template <typename GenFn>
     [[nodiscard]] entity with_entity_validation(GenFn&& fn) const
@@ -728,6 +736,8 @@ class eg
         if (obs) obs->on_after_generate(e);
         return e;
     }
+
+    // --- Component resolution ---------------------------------------------
 
     // Build a component_ref span from the owned component entries.
     [[nodiscard]] std::vector<component_ref> all_component_refs() const

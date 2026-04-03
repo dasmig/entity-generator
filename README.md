@@ -9,39 +9,17 @@
 
 ## Features
 
-The library currently supports the following:
+- **Core** — Generate entities composed of user-defined components. Each component produces a typed random value accessible via `entity.get<T>(key)`. Register, remove, and generate with fluent chaining.
 
-- **Entity Generation**. The library generates entities composed of user-defined components, each producing a random value.
+- **Randomness & Replay** — Deterministic seeding at per-call and generator level. Every entity and component stores its seed for full replay via seed signatures.
 
-- **Extensible Component Interface**. Define custom components by implementing the `component` interface. Components can produce any type (`std::wstring`, `int`, `double`, structs, etc.).
+- **Advanced Generation** — Batch generation, named component groups, selective generation by key subset, and component weights for probabilistic inclusion.
 
-- **Typed Retrieval**. Access generated component values with full type safety via `entity.get<T>(key)`.
+- **Validation & Hooks** — Per-component `validate()` with automatic retries, entity-level validator callbacks, and a `generation_observer` interface with 18 lifecycle hooks (before/after for generation, skip, retry, fail, and registration events).
 
-- **Selective Generation**. Generate entities with all registered components, or only a specific subset.
+- **Serialization** — `entity.to_string()` and `operator<<` render all component display values in generation order.
 
-- **Component Dependencies**. Components receive a `generation_context` providing access to previously generated values, enabling dependent generation logic.
-
-- **Reproducible Randomness**. Seed the generator for deterministic output. Supports per-call seeds and generator-level seeding for reproducible sequences.
-
-- **Seed Signatures**. Every generated entity and component stores the random seed used to produce it, enabling replay and debugging.
-
-- **Batch Generation**. Generate multiple entities in a single call with `generate_batch(count)`.
-
-- **Component Groups**. Define named groups of components for convenient selective generation.
-
-- **Component Weights**. Assign inclusion probabilities to components. A weight of `1.0` (default) means always included; `0.5` means included roughly half the time. Weights can be defined in the component interface or overridden per-component at registration time.
-
-- **Entity Serialization**. Convert entities to a formatted string via `entity.to_string()`, which assembles each component's display value.
-
-- **Validation Hooks**. Per-component `validate()` method and entity-level validator callback with configurable retry limits.
-
-- **Event Hooks**. Attach a `generation_observer` to receive before/after callbacks for generation, component production, skips, retries, failures, and registration changes.
-
-- **Thread Safety**. Create independent `eg` instances for lock-free concurrent generation.
-
-- **Fluent Registration**. Chain `add()` and `remove()` calls to configure the generator.
-
-- **Composable**. Components can internally use [name-generator](https://github.com/dasmig/name-generator) and [nickname-generator](https://github.com/dasmig/nickname-generator) or any other logic.
+- **Composable & Thread-Safe** — Components can wrap [name-generator](https://github.com/dasmig/name-generator) and [nickname-generator](https://github.com/dasmig/nickname-generator). Independent `eg` instances enable lock-free concurrent generation.
 
 ## Integration
 
@@ -58,16 +36,13 @@ to the files you want to generate entities and set the necessary switches to ena
 
 The library makes use of a [`random generation library`](https://github.com/effolkronium/random) by [effolkronium](https://github.com/effolkronium). For the convenience of the user, the header-only file containing the implementation was added to this repository.
 
-## Usage
+## Quick Start
 
-You define what an entity contains by implementing the `component` interface and registering instances with the generator.
-
-### Defining Components
+Define a component by implementing the `component` interface:
 
 ```cpp
 #include <dasmig/entitygen.hpp>
 
-// A component that generates a random character class.
 class character_class : public dasmig::component
 {
   public:
@@ -85,7 +60,6 @@ class character_class : public dasmig::component
     }
 };
 
-// A component that generates a random age.
 class age : public dasmig::component
 {
   public:
@@ -102,378 +76,26 @@ class age : public dasmig::component
 };
 ```
 
-### Registering and Generating
+Register components and generate entities:
 
 ```cpp
 using eg = dasmig::eg;
 
-// Register components with fluent chaining.
 eg::instance()
     .add(std::make_unique<character_class>())
     .add(std::make_unique<age>());
 
-// Generate an entity with all registered components.
-auto entity = eg::instance().generate();
-
-// Generate an entity with only specific components.
-auto partial = eg::instance().generate({L"class"});
-
-// Output to stream.
+// Generate and stream.
 std::wcout << eg::instance().generate() << std::endl;
+// e.g. "class: Mage  age: 34"
 
-// Generate with a seed for reproducible results.
-auto seeded = eg::instance().generate(42);
-
-// Seed the generator for a deterministic sequence.
-eg::instance().seed(123);
-auto first  = eg::instance().generate();
-auto second = eg::instance().generate();
-eg::instance().unseed();
-```
-
-### Typed Retrieval
-
-```cpp
+// Typed access.
 auto entity = eg::instance().generate();
-
-// Access values with their original types.
-std::wstring char_class = entity.get<std::wstring>(L"class");
+std::wstring cls = entity.get<std::wstring>(L"class");
 int char_age = entity.get<int>(L"age");
 
-// Check if a component exists.
-if (entity.has(L"name")) { /* ... */ }
+// Reproducible with a seed.
+auto seeded = eg::instance().generate(42);
 ```
 
-### Component Dependencies
-
-Components receive a `generation_context` that provides access to values generated by earlier components. Registration order determines generation order.
-
-```cpp
-// A greeting component that depends on a previously generated name.
-class greeting : public dasmig::component
-{
-  public:
-    [[nodiscard]] std::wstring key() const override { return L"greeting"; }
-    [[nodiscard]] std::any generate(
-        const dasmig::generation_context& ctx) const override
-    {
-        // Access a value generated by an earlier component.
-        auto name = ctx.get<std::wstring>(L"name");
-        return L"Hello, " + name + L"!";
-    }
-    [[nodiscard]] std::wstring to_string(const std::any& value) const override
-    {
-        return default_to_string(value);
-    }
-};
-
-// Register name before greeting so the dependency is available.
-eg::instance()
-    .add(std::make_unique<character_name>())
-    .add(std::make_unique<greeting>());
-```
-
-The context also exposes `ctx.has(key)` to check whether a dependency was generated (useful when generating with a subset of components).
-
-### Composing with Other Generators
-
-Components can wrap [name-generator](https://github.com/dasmig/name-generator) and [nickname-generator](https://github.com/dasmig/nickname-generator) to bring in name and nickname generation:
-
-```cpp
-#include <dasmig/entitygen.hpp>
-#include <dasmig/namegen.hpp>
-#include <dasmig/nicknamegen.hpp>
-
-class full_name : public dasmig::component
-{
-  public:
-    [[nodiscard]] std::wstring key() const override { return L"name"; }
-    [[nodiscard]] std::any generate(
-        const dasmig::generation_context& ctx) const override
-    {
-        return static_cast<std::wstring>(
-            dasmig::ng::instance().get_name().append_surname());
-    }
-    [[nodiscard]] std::wstring to_string(const std::any& value) const override
-    {
-        return default_to_string(value);
-    }
-};
-
-class player_nickname : public dasmig::component
-{
-  public:
-    [[nodiscard]] std::wstring key() const override { return L"nickname"; }
-    [[nodiscard]] std::any generate(
-        const dasmig::generation_context& ctx) const override
-    {
-        return static_cast<std::wstring>(
-            dasmig::nng::instance().get_nickname());
-    }
-    [[nodiscard]] std::wstring to_string(const std::any& value) const override
-    {
-        return default_to_string(value);
-    }
-};
-```
-
-### Custom Types
-
-Components can produce any type. Override `to_string()` on your component to enable stream output:
-
-```cpp
-struct vec2 { float x, y; };
-
-class position : public dasmig::component
-{
-  public:
-    [[nodiscard]] std::wstring key() const override { return L"position"; }
-    [[nodiscard]] std::any generate(
-        const dasmig::generation_context& ctx) const override
-    {
-        return vec2{
-            ctx.random().get(-100.f, 100.f),
-            ctx.random().get(-100.f, 100.f)};
-    }
-    [[nodiscard]] std::wstring to_string(const std::any& value) const override
-    {
-        auto pos = std::any_cast<vec2>(value);
-        return L"(" + std::to_wstring(pos.x) + L", " + std::to_wstring(pos.y) + L")";
-    }
-};
-```
-
-### Seed Signatures
-
-Every generated entity and component stores the random seed that produced it. This enables replay, debugging, and logging.
-
-```cpp
-auto entity = eg::instance().generate();
-
-// Retrieve the entity-level seed. This single value can reproduce
-// all component seeds and thus the entire entity.
-std::uint64_t entity_seed = entity.seed();
-
-// Retrieve the seed used for a specific component.
-std::uint64_t age_seed = entity.seed(L"age");
-```
-
-Component seeds can be used to replay individual component generation:
-
-```cpp
-// Replay a component's random values using its captured seed.
-effolkronium::random_local rng;
-rng.seed(static_cast<std::mt19937::result_type>(entity.seed(L"age")));
-int replayed_age = rng.get(18, 65); // Same value as entity.get<int>(L"age")
-```
-
-The seed hierarchy is fully deterministic:
-
-```
-generation seed (per-call or generator-level)
-  └─ entity seed          ← entity.seed()
-       └─ local engine
-            ├─ component A seed   ← entity.seed(L"A")
-            ├─ component B seed   ← entity.seed(L"B")
-            └─ ...
-```
-
-### Batch Generation
-
-Generate multiple entities in a single call:
-
-```cpp
-// Generate 10 entities with all registered components.
-auto batch = eg::instance().generate_batch(10);
-
-for (const auto& e : batch)
-{
-    std::wcout << e << L'\n';
-}
-
-// Seeded batch for deterministic results.
-auto seeded_batch = eg::instance().generate_batch(10, 42);
-```
-
-### Component Groups
-
-Define named groups of component keys for convenient selective generation:
-
-```cpp
-// Register components.
-eg::instance()
-    .add(std::make_unique<character_name>())
-    .add(std::make_unique<character_class>())
-    .add(std::make_unique<age>())
-    .add(std::make_unique<level>())
-    .add(std::make_unique<character_stats>());
-
-// Define groups.
-eg::instance()
-    .add_group(L"identity", {L"name", L"class"})
-    .add_group(L"combat", {L"class", L"level", L"stats"});
-
-// Generate using a group.
-auto fighter = eg::instance().generate_group(L"combat");
-
-// Seeded group generation.
-auto seeded = eg::instance().generate_group(L"combat", 42);
-
-// Check and remove groups.
-if (eg::instance().has_group(L"identity")) { /* ... */ }
-eg::instance().remove_group(L"identity");
-```
-
-### Thread Safety
-
-The `eg` class supports independent instances. Create one per thread for lock-free concurrent generation:
-
-```cpp
-// Each thread gets its own generator — no locks needed.
-std::vector<std::jthread> threads;
-for (int i = 0; i < 4; ++i)
-{
-    threads.emplace_back([&](int id) {
-        dasmig::eg gen;
-        gen.add(std::make_unique<name>(/* … */));
-        gen.seed(id);
-        auto e = gen.generate();
-    }, i);
-}
-```
-
-`eg` is move-constructible and move-assignable, so instances can be transferred between scopes. The `instance()` singleton is still available for single-threaded convenience.
-
-### Component Weights
-
-Components can declare an inclusion weight via the `weight()` virtual method (default `1.0`). Values range from `0.0` (never included) to `1.0` (always included). The generator rolls against the weight during generation; components that fail the roll are skipped.
-
-```cpp
-class rare_trait : public dasmig::component
-{
-  public:
-    std::wstring key() const override { return L"rare_trait"; }
-    double weight() const override { return 0.2; } // 20% chance
-
-    std::any generate(const dasmig::generation_context& ctx) const override
-    {
-        return ctx.random().get<std::wstring>({L"scar", L"tattoo", L"birthmark"});
-    }
-
-    std::wstring to_string(const std::any& value) const override
-    {
-        return default_to_string(value);
-    }
-};
-```
-
-Weights can also be overridden at registration time or updated later, taking precedence over the component's own `weight()` method:
-
-```cpp
-// Override weight at registration.
-eg::instance().add(std::make_unique<rare_trait>(), 0.5);
-
-// Update weight after registration.
-eg::instance().weight(L"rare_trait", 0.8);
-```
-
-**Note:** When a weighted component is skipped, dependent components that call `ctx.get<T>()` for it will throw. Use `ctx.has()` to guard dependency access in weight-sensitive components.
-
-### Entity Serialization
-
-Convert an entity to a formatted string with `to_string()`. Each component is rendered as `"key: display"` separated by two spaces. The output matches `operator<<`.
-
-```cpp
-auto entity = eg::instance().generate();
-
-// Get the formatted string.
-std::wstring text = entity.to_string();
-// e.g. "name: Alice  class: Mage  age: 34"
-
-// Equivalent to streaming:
-std::wcout << entity << L'\n';
-```
-
-### Validation Hooks
-
-Validation operates at two levels, both opt-in with zero-cost defaults.
-
-**Component-level:** Override `validate()` on your component. If it returns `false`, the generator re-rolls with a new seed up to `max_retries` times, then throws `std::runtime_error`.
-
-```cpp
-class even_age : public dasmig::component
-{
-  public:
-    std::wstring key() const override { return L"age"; }
-    std::any generate(const dasmig::generation_context& ctx) const override
-    {
-        return ctx.random().get(18, 65);
-    }
-    bool validate(const std::any& value) const override
-    {
-        return std::any_cast<int>(value) % 2 == 0;
-    }
-    std::wstring to_string(const std::any& value) const override
-    {
-        return default_to_string(value);
-    }
-};
-```
-
-**Entity-level:** Set a callback on the generator. If it returns `false`, the entire entity is re-generated up to `max_retries` additional times.
-
-```cpp
-eg::instance().set_validator([](const dasmig::entity& e) {
-    return e.get<int>(L"age") > 30;
-});
-
-auto e = eg::instance().generate(); // age is guaranteed > 30
-
-eg::instance().clear_validator(); // remove the validator
-```
-
-Configure the retry limit (default 10) for both levels:
-
-```cpp
-eg::instance().max_retries(20);
-```
-
-### Event Hooks
-
-Attach a `generation_observer` to any generator to receive lifecycle callbacks. Override only the hooks you need; all default to no-ops.
-
-```cpp
-class log_observer : public dasmig::generation_observer
-{
-  public:
-    void on_before_generate() override
-    {
-        std::wcout << L"generating entity...\n";
-    }
-    void on_after_component(const std::wstring& key,
-                            const std::any& /*value*/) override
-    {
-        std::wcout << L"produced " << key << L'\n';
-    }
-};
-
-eg::instance().set_observer(std::make_shared<log_observer>());
-eg::instance().generate(); // prints hook messages
-eg::instance().clear_observer();
-```
-
-The full set of hooks (9 before/after pairs, 18 methods):
-
-| Event | Before | After |
-|---|---|---|
-| Entity generation | `on_before_generate()` | `on_after_generate(entity)` |
-| Component generation | `on_before_component(key)` | `on_after_component(key, value)` |
-| Component skip (weight) | `on_before_skip(key)` | `on_after_skip(key)` |
-| Component retry | `on_before_retry(key, attempt)` | `on_after_retry(key, attempt, value)` |
-| Component fail | `on_before_fail(key)` | `on_after_fail(key)` |
-| Entity retry | `on_before_entity_retry(attempt)` | `on_after_entity_retry(attempt)` |
-| Entity fail | `on_before_entity_fail()` | `on_after_entity_fail()` |
-| Registration | `on_before_add(key)` | `on_after_add(key)` |
-| Removal | `on_before_remove(key)` | `on_after_remove(key)` |
-
-For per-component filtering, check the `key` parameter inside your hook override.
+For the complete feature guide — component dependencies, custom types, seed signatures, batch generation, groups, weights, validation, event hooks, and more — see the **[Usage Guide](doc/usage.md)**.
