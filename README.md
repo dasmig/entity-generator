@@ -99,3 +99,5 @@ auto seeded = eg::instance().generate(42);
 ```
 
 For the complete feature guide — component dependencies, custom types, seed signatures, batch generation, groups, weights, validation, event hooks, and more — see the **[Usage Guide](doc/usage.md)**.
+
+For planned features — concurrent generation, conditional components, structured serialization, EnTT integration, and more — see the **[Roadmap](doc/roadmap.md)**.
