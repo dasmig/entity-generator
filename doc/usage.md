@@ -16,6 +16,8 @@ This guide covers every feature of the entity-generator library in detail. For a
 - [Thread Safety](#thread-safety)
 - [Component Weights](#component-weights)
 - [Entity Serialization](#entity-serialization)
+- [Structured Serialization](#structured-serialization)
+- [Concurrent Batch Generation](#concurrent-batch-generation)
 - [Validation Hooks](#validation-hooks)
 - [Event Hooks](#event-hooks)
 - [Conditional Components](#conditional-components)
@@ -351,6 +353,45 @@ std::wstring text = entity.to_string();
 // Equivalent to streaming:
 std::wcout << entity << L'\n';
 ```
+
+## Structured Serialization
+
+`to_map()` returns component values as a `std::map<std::wstring, std::wstring>` mapping keys to their display strings. This is convenient for integration with JSON, XML, or any key–value serialization format.
+
+```cpp
+auto entity = eg::instance().generate();
+auto m = entity.to_map();
+// m["name"] = "Alice", m["class"] = "Mage", m["age"] = "34"
+
+// Iterate all entries.
+for (const auto& [key, value] : m)
+{
+    std::wcout << key << L" = " << value << L'\n';
+}
+```
+
+Custom types work seamlessly — the map uses each component's `to_string()` output:
+
+```cpp
+auto m = entity.to_map();
+// m["pos"] = "(3,7)" — uses custom_type_component::to_string()
+```
+
+## Concurrent Batch Generation
+
+`generate_batch_async()` generates entities in parallel using `std::async`. Entity seeds are pre-derived sequentially from the engine, then each entity is generated in its own async task. Results are returned in seed order.
+
+```cpp
+// Generate 100 entities concurrently.
+auto batch = eg::instance().generate_batch_async(100);
+
+// Seeded: deterministic regardless of thread scheduling.
+auto batch1 = eg::instance().generate_batch_async(50, 42);
+auto batch2 = eg::instance().generate_batch_async(50, 42);
+// batch1[i] == batch2[i] for all i
+```
+
+Entity-level validation applies to each concurrent task independently. If an observer is set, the caller is responsible for its thread safety (hooks fire from multiple threads concurrently).
 
 ## Validation Hooks
 

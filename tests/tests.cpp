@@ -1,5 +1,7 @@
 #include "catch_amalgamated.hpp"
 #include "../dasmig/entitygen.hpp"
+#include <atomic>
+#include <set>
 #include <sstream>
 
 // ---------------------------------------------------------------------------
@@ -2322,4 +2324,235 @@ TEST_CASE("default observer covers conditional skip", "[conditional][observer]")
 
     // Should not crash — default no-op observer.
     REQUIRE_NOTHROW(gen.generate());
+}
+
+// ---------------------------------------------------------------------------
+// Structured serialization: to_map
+// ---------------------------------------------------------------------------
+
+TEST_CASE("to_map returns key-display pairs", "[serialization][to_map]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"name", L"Alice"));
+    gen.add(std::make_unique<int_component>(L"age", 30));
+
+    auto e = gen.generate();
+    auto m = e.to_map();
+
+    REQUIRE(m.size() == 2);
+    REQUIRE(m.at(L"name") == L"Alice");
+    REQUIRE(m.at(L"age") == L"30");
+}
+
+TEST_CASE("to_map on empty entity returns empty map", "[serialization][to_map]")
+{
+    dasmig::eg gen;
+    auto e = gen.generate();
+    auto m = e.to_map();
+
+    REQUIRE(m.empty());
+}
+
+TEST_CASE("to_map single component", "[serialization][to_map]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"x", L"hello"));
+
+    auto m = gen.generate().to_map();
+
+    REQUIRE(m.size() == 1);
+    REQUIRE(m.at(L"x") == L"hello");
+}
+
+TEST_CASE("to_map preserves custom type display", "[serialization][to_map]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<custom_type_component>(custom_type{3, 7}));
+
+    auto m = gen.generate().to_map();
+
+    REQUIRE(m.at(L"pos") == L"(3,7)");
+}
+
+TEST_CASE("to_map with selective generation", "[serialization][to_map]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"A"));
+    gen.add(std::make_unique<string_component>(L"b", L"B"));
+    gen.add(std::make_unique<string_component>(L"c", L"C"));
+
+    auto m = gen.generate({L"a", L"c"}).to_map();
+
+    REQUIRE(m.size() == 2);
+    REQUIRE(m.contains(L"a"));
+    REQUIRE(m.contains(L"c"));
+    REQUIRE_FALSE(m.contains(L"b"));
+}
+
+TEST_CASE("to_map with seeded generation is reproducible",
+          "[serialization][to_map][seed]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<random_int_component>(L"val", 1, 1000));
+
+    auto m1 = gen.generate(42).to_map();
+    auto m2 = gen.generate(42).to_map();
+
+    REQUIRE(m1 == m2);
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent batch generation: generate_batch_async
+// ---------------------------------------------------------------------------
+
+TEST_CASE("generate_batch_async returns correct count", "[async][batch]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"name", L"X"));
+
+    auto entities = gen.generate_batch_async(5);
+
+    REQUIRE(entities.size() == 5);
+    for (const auto& e : entities)
+    {
+        REQUIRE(e.get<std::wstring>(L"name") == L"X");
+    }
+}
+
+TEST_CASE("generate_batch_async zero count returns empty", "[async][batch]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"v"));
+
+    auto entities = gen.generate_batch_async(0);
+
+    REQUIRE(entities.empty());
+}
+
+TEST_CASE("generate_batch_async seeded is deterministic", "[async][batch][seed]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<random_int_component>(L"val", 1, 10000));
+
+    auto batch1 = gen.generate_batch_async(10, 42);
+    auto batch2 = gen.generate_batch_async(10, 42);
+
+    REQUIRE(batch1.size() == batch2.size());
+    for (std::size_t i = 0; i < batch1.size(); ++i)
+    {
+        REQUIRE(batch1[i].get<int>(L"val") == batch2[i].get<int>(L"val"));
+    }
+}
+
+TEST_CASE("generate_batch_async seeded zero count", "[async][batch][seed]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"v"));
+
+    auto entities = gen.generate_batch_async(0, 99);
+
+    REQUIRE(entities.empty());
+}
+
+TEST_CASE("generate_batch_async produces unique entity seeds",
+          "[async][batch][seed]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<random_int_component>(L"v", 1, 100000));
+
+    auto batch = gen.generate_batch_async(20, 42);
+
+    std::set<std::uint64_t> seeds;
+    for (const auto& e : batch)
+    {
+        seeds.insert(e.seed());
+    }
+    REQUIRE(seeds.size() == 20);
+}
+
+TEST_CASE("generate_batch_async with multiple components", "[async][batch]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"name", L"Hero"));
+    gen.add(std::make_unique<int_component>(L"level", 5));
+    gen.add(std::make_unique<random_int_component>(L"hp", 10, 100));
+
+    auto batch = gen.generate_batch_async(8);
+
+    REQUIRE(batch.size() == 8);
+    for (const auto& e : batch)
+    {
+        REQUIRE(e.has(L"name"));
+        REQUIRE(e.has(L"level"));
+        REQUIRE(e.has(L"hp"));
+        REQUIRE(e.get<std::wstring>(L"name") == L"Hero");
+        REQUIRE(e.get<int>(L"level") == 5);
+    }
+}
+
+TEST_CASE("generate_batch_async entity validation applies",
+          "[async][batch][validation]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<random_int_component>(L"val", 1, 100));
+    gen.set_validator([](const dasmig::entity& e) {
+        return e.get<int>(L"val") > 20;
+    });
+    gen.max_retries(100);
+
+    auto batch = gen.generate_batch_async(5);
+
+    for (const auto& e : batch)
+    {
+        REQUIRE(e.get<int>(L"val") > 20);
+    }
+}
+
+TEST_CASE("generate_batch_async seeded entity validation applies",
+          "[async][batch][validation][seed]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<random_int_component>(L"val", 1, 100));
+    gen.set_validator([](const dasmig::entity& e) {
+        return e.get<int>(L"val") > 20;
+    });
+    gen.max_retries(100);
+
+    auto batch = gen.generate_batch_async(5, 77);
+
+    for (const auto& e : batch)
+    {
+        REQUIRE(e.get<int>(L"val") > 20);
+    }
+}
+
+TEST_CASE("generate_batch_async single entity", "[async][batch]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"k", L"v"));
+
+    auto batch = gen.generate_batch_async(1);
+
+    REQUIRE(batch.size() == 1);
+    REQUIRE(batch[0].get<std::wstring>(L"k") == L"v");
+}
+
+TEST_CASE("generate_batch_async observer hooks fire",
+          "[async][batch][observer]")
+{
+    // Use an atomic counter since observer hooks fire from multiple threads.
+    struct counting_observer : dasmig::generation_observer
+    {
+        std::atomic<int> count{0};
+        void on_before_generate() override { ++count; }
+    };
+
+    auto obs = std::make_shared<counting_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<string_component>(L"x", L"v"));
+
+    gen.generate_batch_async(5);
+
+    REQUIRE(obs->count == 5);
 }

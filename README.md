@@ -12,11 +12,11 @@
 
 - **Randomness & Replay** — Deterministic seeding at per-call and generator level. Every entity and component stores its seed for full replay via seed signatures.
 
-- **Advanced Generation** — Batch generation, named component groups, selective generation by key subset, component weights for probabilistic inclusion, and conditional components for logic-driven inclusion via `should_generate(ctx)`.
+- **Advanced Generation** — Batch generation (synchronous and concurrent), named component groups, selective generation by key subset, component weights for probabilistic inclusion, and conditional components for logic-driven inclusion via `should_generate(ctx)`.
 
 - **Validation & Hooks** — Per-component `validate()` with automatic retries, entity-level validator callbacks, and a `generation_observer` interface with 15 lifecycle hooks for generation, skip, retry, fail, and registration events.
 
-- **Serialization** — `entity.to_string()` and `operator<<` render all component display values in generation order.
+- **Serialization** — `entity.to_string()`, `operator<<`, and `entity.to_map()` for structured key–value export.
 
 - **Composable & Thread-Safe** — Components can wrap [name-generator](https://github.com/dasmig/name-generator) and [nickname-generator](https://github.com/dasmig/nickname-generator). Independent `eg` instances enable lock-free concurrent generation.
 

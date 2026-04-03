@@ -309,5 +309,32 @@ int main()
     }
     dasmig::eg::instance().remove(L"title");
 
+    // Structured serialization: to_map().
+    std::wcout << L"\n--- Structured serialization (to_map) ---\n";
+    auto mapped = dasmig::eg::instance().generate({L"name", L"class", L"age"});
+    for (const auto& [key, value] : mapped.to_map())
+    {
+        std::wcout << key << L" = " << value << L'\n';
+    }
+
+    // Concurrent batch generation.
+    std::wcout << L"\n--- Concurrent batch (10 entities) ---\n";
+    auto async_batch = dasmig::eg::instance().generate_batch_async(10);
+    for (const auto& e : async_batch)
+    {
+        std::wcout << e << L'\n';
+    }
+
+    // Seeded concurrent batch (deterministic).
+    std::wcout << L"\n--- Seeded concurrent batch ---\n";
+    auto ab1 = dasmig::eg::instance().generate_batch_async(3, 42);
+    auto ab2 = dasmig::eg::instance().generate_batch_async(3, 42);
+    for (std::size_t i = 0; i < ab1.size(); i++)
+    {
+        std::wcout << L"Match: "
+                   << (ab1[i].to_string() == ab2[i].to_string() ? L"yes" : L"no")
+                   << L"  " << ab1[i] << L'\n';
+    }
+
     return 0;
 }

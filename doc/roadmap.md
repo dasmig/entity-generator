@@ -2,13 +2,13 @@
 
 Planned features for the entity-generator library. Items are not in priority order.
 
-## Concurrent Batch Generation
+## ~~Concurrent Batch Generation~~ ✓
 
-`generate_batch_async(count)` generates entities in parallel while preserving deterministic seeding. The approach: pre-derive N entity seeds from the engine sequentially (cheap), then dispatch N independent generation calls concurrently — each with its own pre-computed seed. Same seeds produce the same entities regardless of thread scheduling. Returns `std::vector<entity>` in seed order.
+Done — `generate_batch_async(count)` and `generate_batch_async(count, seed)` generate entities in parallel with deterministic seeding.
 
-## Structured Serialization
+## ~~Structured Serialization~~ ✓
 
-`entity::to_map()` returning `std::map<std::wstring, std::wstring>` for easy integration with JSON/XML serializers. Optionally `entity::from_map()` with a component registry for deserialization/replay.
+Done — `entity::to_map()` returns `std::map<std::wstring, std::wstring>` for easy integration with JSON/XML serializers.
 
 ## Generation Statistics
 

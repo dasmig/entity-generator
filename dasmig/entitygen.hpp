@@ -6,6 +6,7 @@
 #include <any>
 #include <cstdint>
 #include <functional>
+#include <future>
 #include <iterator>
 #include <map>
 #include <memory>
@@ -186,6 +187,17 @@ class entity
         std::vector<std::wstring> result;
         result.reserve(_entries.size());
         std::ranges::transform(_entries, std::back_inserter(result), &entry::key);
+        return result;
+    }
+
+    // Return component values as a map of key to display string.
+    [[nodiscard]] std::map<std::wstring, std::wstring> to_map() const
+    {
+        std::map<std::wstring, std::wstring> result;
+        for (const auto& e : _entries)
+        {
+            result.emplace(e.key, e.display);
+        }
         return result;
     }
 
@@ -561,6 +573,81 @@ class eg
         return entities;
     }
 
+    // --- Concurrent batch generation -------------------------------------
+
+    // Generate multiple entities concurrently with all registered components.
+    // Entity seeds are pre-derived sequentially from the engine, then each
+    // entity is generated in its own async task. Results are returned in
+    // seed order. If an observer is set, the caller is responsible for its
+    // thread safety.
+    [[nodiscard]] std::vector<entity> generate_batch_async(std::size_t count)
+    {
+        auto refs = all_component_refs();
+
+        std::vector<std::uint64_t> seeds(count);
+        std::ranges::generate(seeds,
+            [&] { return static_cast<std::uint64_t>(_engine()); });
+
+        std::vector<std::future<entity>> futures;
+        futures.reserve(count);
+        std::ranges::transform(seeds, std::back_inserter(futures),
+            [this, &refs](auto task_seed) {
+                return std::async(std::launch::async,
+                    [this, &refs, task_seed] {
+                        std::mt19937 engine{
+                            static_cast<std::mt19937::result_type>(task_seed)};
+                        return generate_with_hooks([&] {
+                            return generate_impl(
+                                refs, engine, _max_retries, _observer.get());
+                        });
+                    });
+            });
+
+        std::vector<entity> entities;
+        entities.reserve(count);
+        std::ranges::transform(futures, std::back_inserter(entities),
+            [](auto& f) { return f.get(); });
+
+        return entities;
+    }
+
+    // Generate multiple entities concurrently using a specific seed for
+    // reproducible results. The seed initializes a dedicated engine for
+    // pre-deriving per-entity seeds; all subsequent generation is parallel.
+    [[nodiscard]] std::vector<entity> generate_batch_async(
+        std::size_t count, std::uint64_t call_seed) const
+    {
+        auto refs = all_component_refs();
+
+        std::mt19937 seed_engine{
+            static_cast<std::mt19937::result_type>(call_seed)};
+        std::vector<std::uint64_t> seeds(count);
+        std::ranges::generate(seeds,
+            [&] { return static_cast<std::uint64_t>(seed_engine()); });
+
+        std::vector<std::future<entity>> futures;
+        futures.reserve(count);
+        std::ranges::transform(seeds, std::back_inserter(futures),
+            [this, &refs](auto task_seed) {
+                return std::async(std::launch::async,
+                    [this, &refs, task_seed] {
+                        std::mt19937 engine{
+                            static_cast<std::mt19937::result_type>(task_seed)};
+                        return generate_with_hooks([&] {
+                            return generate_impl(
+                                refs, engine, _max_retries, _observer.get());
+                        });
+                    });
+            });
+
+        std::vector<entity> entities;
+        entities.reserve(count);
+        std::ranges::transform(futures, std::back_inserter(entities),
+            [](auto& f) { return f.get(); });
+
+        return entities;
+    }
+
     // --- Component groups ------------------------------------------------
 
     // Register a named group of component keys for convenient generation.
@@ -760,14 +847,15 @@ class eg
     {
         std::vector<component_ref> filtered;
 
-        for (const auto& [key, comp] : _components)
-        {
-            if (std::ranges::contains(component_keys, key))
-            {
-                filtered.push_back({key, std::cref(*comp),
-                    effective_weight(key, *comp)});
-            }
-        }
+        auto matching = _components
+            | std::views::filter([&](const auto& entry) {
+                return std::ranges::contains(component_keys, entry.first);
+            })
+            | std::views::transform([this](const auto& entry) -> component_ref {
+                return {entry.first, std::cref(*entry.second),
+                        effective_weight(entry.first, *entry.second)};
+            });
+        std::ranges::copy(matching, std::back_inserter(filtered));
 
         return filtered;
     }
