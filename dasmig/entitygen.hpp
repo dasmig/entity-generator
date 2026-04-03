@@ -93,6 +93,15 @@ class component
         return true;
     }
 
+    // Decide whether this component should be generated based on the
+    // current context. Unlike weight (probabilistic), this is logic-driven.
+    // Return false to skip generation entirely. Default always generates.
+    [[nodiscard]] virtual bool should_generate(
+        const generation_context& /*ctx*/) const
+    {
+        return true;
+    }
+
   protected:
     // Default conversion covering common standard types. Derived classes can
     // call this from their to_string() implementation.
@@ -656,6 +665,17 @@ class eg
                     }
                     continue;
                 }
+            }
+
+            // Conditional check: skip if the component opts out based on context.
+            if (!ref.comp.get().should_generate(ctx))
+            {
+                if (obs)
+                {
+                    obs->on_before_skip(ref.key);
+                    obs->on_after_skip(ref.key);
+                }
+                continue;
             }
 
             if (obs) obs->on_before_component(ref.key);

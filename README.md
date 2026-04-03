@@ -13,7 +13,7 @@
 
 - **Randomness & Replay** — Deterministic seeding at per-call and generator level. Every entity and component stores its seed for full replay via seed signatures.
 
-- **Advanced Generation** — Batch generation, named component groups, selective generation by key subset, and component weights for probabilistic inclusion.
+- **Advanced Generation** — Batch generation, named component groups, selective generation by key subset, component weights for probabilistic inclusion, and conditional components for logic-driven inclusion via `should_generate(ctx)`.
 
 - **Validation & Hooks** — Per-component `validate()` with automatic retries, entity-level validator callbacks, and a `generation_observer` interface with 18 lifecycle hooks (before/after for generation, skip, retry, fail, and registration events).
 

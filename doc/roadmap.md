@@ -6,10 +6,6 @@ Planned features for the entity-generator library. Items are not in priority ord
 
 `generate_batch_async(count)` generates entities in parallel while preserving deterministic seeding. The approach: pre-derive N entity seeds from the engine sequentially (cheap), then dispatch N independent generation calls concurrently — each with its own pre-computed seed. Same seeds produce the same entities regardless of thread scheduling. Returns `std::vector<entity>` in seed order.
 
-## Conditional Components
-
-A component can declare `bool should_generate(const generation_context& ctx)` (default `true`). The generator checks this before producing the value. Unlike weights (probabilistic), this is logic-driven — e.g., "only generate `stats` if `class` is `Warrior`". Zero-cost default: the virtual returns `true`.
-
 ## Structured Serialization
 
 `entity::to_map()` returning `std::map<std::wstring, std::wstring>` for easy integration with JSON/XML serializers. Optionally `entity::from_map()` with a component registry for deserialization/replay.

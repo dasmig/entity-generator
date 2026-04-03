@@ -268,5 +268,46 @@ int main()
     dasmig::eg::instance().generate({L"name", L"class"});
     dasmig::eg::instance().clear_observer();
 
+    // Conditional component: only generates when "class" is "Warrior".
+    class warrior_title : public dasmig::component
+    {
+      public:
+        [[nodiscard]] std::wstring key() const override { return L"title"; }
+
+        [[nodiscard]] std::any generate(
+            const dasmig::generation_context& ctx) const override
+        {
+            static const std::vector<std::wstring> titles{
+                L"Warlord", L"Champion", L"Berserker"};
+            return ctx.random().get(titles);
+        }
+
+        [[nodiscard]] bool should_generate(
+            const dasmig::generation_context& ctx) const override
+        {
+            return ctx.has(L"class")
+                && ctx.get<std::wstring>(L"class") == L"Warrior";
+        }
+
+        [[nodiscard]] std::wstring to_string(const std::any& value) const override
+        {
+            return default_to_string(value);
+        }
+    };
+
+    std::wcout << L"\n--- Conditional component (title only for Warriors) ---\n";
+    dasmig::eg::instance().add(std::make_unique<warrior_title>());
+    for (std::size_t i = 0; i < 6; i++)
+    {
+        auto e = dasmig::eg::instance().generate({L"class", L"title"});
+        std::wcout << e.get<std::wstring>(L"class");
+        if (e.has(L"title"))
+        {
+            std::wcout << L" - " << e.get<std::wstring>(L"title");
+        }
+        std::wcout << L'\n';
+    }
+    dasmig::eg::instance().remove(L"title");
+
     return 0;
 }

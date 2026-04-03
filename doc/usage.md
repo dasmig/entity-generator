@@ -18,6 +18,7 @@ This guide covers every feature of the entity-generator library in detail. For a
 - [Entity Serialization](#entity-serialization)
 - [Validation Hooks](#validation-hooks)
 - [Event Hooks](#event-hooks)
+- [Conditional Components](#conditional-components)
 
 ## Defining Components
 
@@ -434,3 +435,34 @@ The full set of hooks (9 before/after pairs, 18 methods):
 | Removal | `on_before_remove(key)` | `on_after_remove(key)` |
 
 For per-component filtering, check the `key` parameter inside your hook override.
+
+## Conditional Components
+
+Components can override `should_generate(ctx)` to conditionally skip generation based on the current context. Unlike weights (probabilistic), this is logic-driven. The default returns `true`.
+
+```cpp
+class warrior_title : public dasmig::component
+{
+  public:
+    std::wstring key() const override { return L"title"; }
+    std::any generate(const dasmig::generation_context& ctx) const override
+    {
+        static const std::vector<std::wstring> titles{
+            L"Warlord", L"Champion", L"Berserker"};
+        return ctx.random().get(titles);
+    }
+    bool should_generate(const dasmig::generation_context& ctx) const override
+    {
+        return ctx.has(L"class")
+            && ctx.get<std::wstring>(L"class") == L"Warrior";
+    }
+    std::wstring to_string(const std::any& value) const override
+    {
+        return default_to_string(value);
+    }
+};
+```
+
+When `should_generate` returns `false`, the component is skipped entirely — no value is produced and `entity.has(key)` returns `false`. The skip fires the same observer hooks as a weight skip (`on_before_skip` / `on_after_skip`).
+
+**Note:** `should_generate` is checked after the weight roll. If a component is excluded by weight, `should_generate` is never called.

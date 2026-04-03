@@ -326,6 +326,67 @@ class retry_count_component : public dasmig::component
     mutable int _validate_count{0};
 };
 
+// Component that conditionally generates based on a context key.
+class conditional_component : public dasmig::component
+{
+  public:
+    explicit conditional_component(std::wstring key, std::wstring requires_key)
+        : _key{std::move(key)}, _requires{std::move(requires_key)} {}
+
+    [[nodiscard]] std::wstring key() const override { return _key; }
+
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& /*ctx*/) const override
+    {
+        return std::wstring{L"conditional_value"};
+    }
+
+    [[nodiscard]] bool should_generate(
+        const dasmig::generation_context& ctx) const override
+    {
+        return ctx.has(_requires);
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        return default_to_string(value);
+    }
+
+  private:
+    std::wstring _key;
+    std::wstring _requires;
+};
+
+// Component that never generates (should_generate always false).
+class never_generate_component : public dasmig::component
+{
+  public:
+    explicit never_generate_component(std::wstring key)
+        : _key{std::move(key)} {}
+
+    [[nodiscard]] std::wstring key() const override { return _key; }
+
+    [[nodiscard]] std::any generate(
+        const dasmig::generation_context& /*ctx*/) const override
+    {
+        return std::wstring{L"should_not_appear"};
+    }
+
+    [[nodiscard]] bool should_generate(
+        const dasmig::generation_context& /*ctx*/) const override
+    {
+        return false;
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        return default_to_string(value);
+    }
+
+  private:
+    std::wstring _key;
+};
+
 // ---------------------------------------------------------------------------
 // Test observer: records lifecycle events for verification.
 // ---------------------------------------------------------------------------
@@ -2148,4 +2209,130 @@ TEST_CASE("default observer no-ops cover all hooks", "[observer]")
     gen.set_validator([](const dasmig::entity&) { return false; });
     gen.max_retries(1);
     REQUIRE_THROWS(gen.generate());
+}
+
+// ---------------------------------------------------------------------------
+// Conditional components (should_generate)
+// ---------------------------------------------------------------------------
+
+TEST_CASE("default should_generate always returns true", "[conditional]")
+{
+    // Verify the default via a concrete component (no direct ctx needed).
+    string_component comp(L"a", L"val");
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    auto e = gen.generate();
+    // If should_generate defaulted to false, "a" would be absent.
+    REQUIRE(e.has(L"a"));
+}
+
+TEST_CASE("conditional component skips when dependency absent", "[conditional]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<conditional_component>(L"greeting", L"name"));
+
+    auto e = gen.generate();
+    REQUIRE_FALSE(e.has(L"greeting"));
+}
+
+TEST_CASE("conditional component generates when dependency present", "[conditional]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"name", L"Alice"));
+    gen.add(std::make_unique<conditional_component>(L"greeting", L"name"));
+
+    auto e = gen.generate();
+    REQUIRE(e.has(L"greeting"));
+    REQUIRE(e.get<std::wstring>(L"greeting") == L"conditional_value");
+}
+
+TEST_CASE("never_generate component is always skipped", "[conditional]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<never_generate_component>(L"hidden"));
+
+    auto e = gen.generate();
+    REQUIRE_FALSE(e.has(L"hidden"));
+}
+
+TEST_CASE("conditional skip fires observer hooks", "[conditional][observer]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<never_generate_component>(L"hidden"));
+    obs->events.clear();
+
+    gen.generate();
+
+    REQUIRE(std::ranges::count(obs->events, L"before_skip:hidden") == 1);
+    REQUIRE(std::ranges::count(obs->events, L"after_skip:hidden") == 1);
+    REQUIRE(std::ranges::count(obs->events, L"before_component:hidden") == 0);
+}
+
+TEST_CASE("conditional component with seeded generation is deterministic", "[conditional][seed]")
+{
+    dasmig::eg gen1;
+    gen1.add(std::make_unique<string_component>(L"name", L"Alice"));
+    gen1.add(std::make_unique<conditional_component>(L"greeting", L"name"));
+
+    dasmig::eg gen2;
+    gen2.add(std::make_unique<string_component>(L"name", L"Alice"));
+    gen2.add(std::make_unique<conditional_component>(L"greeting", L"name"));
+
+    auto e1 = gen1.generate(42);
+    auto e2 = gen2.generate(42);
+
+    REQUIRE(e1.has(L"greeting") == e2.has(L"greeting"));
+}
+
+TEST_CASE("conditional component in batch", "[conditional][batch]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<never_generate_component>(L"hidden"));
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    auto batch = gen.generate_batch(3);
+    for (const auto& e : batch)
+    {
+        REQUIRE_FALSE(e.has(L"hidden"));
+        REQUIRE(e.has(L"a"));
+    }
+}
+
+TEST_CASE("conditional and weight interact correctly", "[conditional][weight]")
+{
+    dasmig::eg gen;
+    // Component with weight 0.0 AND should_generate false — both skip paths.
+    gen.add(std::make_unique<never_generate_component>(L"hidden"), 0.0);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    auto e = gen.generate();
+    // Weight skip happens first (before should_generate is checked).
+    REQUIRE_FALSE(e.has(L"hidden"));
+    REQUIRE(e.has(L"a"));
+}
+
+TEST_CASE("conditional component in group", "[conditional][group]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"name", L"Alice"));
+    gen.add(std::make_unique<conditional_component>(L"greeting", L"name"));
+    gen.add_group(L"grp", {L"greeting"});
+
+    // Group only has "greeting", but "name" is not in group — so ctx won't
+    // have "name", and greeting should be skipped.
+    auto e = gen.generate_group(L"grp");
+    REQUIRE_FALSE(e.has(L"greeting"));
+}
+
+TEST_CASE("default observer covers conditional skip", "[conditional][observer]")
+{
+    auto obs = std::make_shared<dasmig::generation_observer>();
+    dasmig::eg gen;
+    gen.set_observer(obs);
+    gen.add(std::make_unique<never_generate_component>(L"hidden"));
+
+    // Should not crash — default no-op observer.
+    REQUIRE_NOTHROW(gen.generate());
 }
