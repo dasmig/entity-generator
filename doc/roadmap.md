@@ -14,9 +14,9 @@ Done — `entity::to_map()` returns `std::map<std::wstring, std::wstring>` for e
 
 A built-in observer (or standalone stats struct) that tracks: entities generated, components skipped (weight), retries per component, validation failures. Accessible via `eg::stats()` or as a reusable observer. Useful for tuning weights and retry limits.
 
-## Generic Components
+## ~~Generic Components~~ ✓
 
-A library of ready-made, reusable component templates for common patterns — e.g., `choice_component<T>` (pick from a list), `range_component<T>` (uniform random in a range), `constant_component<T>` (fixed value). Reduces boilerplate for simple components that don't need custom logic.
+Done — Five reusable class templates: `constant_component<T>`, `choice_component<T>`, `range_component<T>`, `callback_component`, and `weighted_choice_component<T>`. All support optional custom formatters.
 
 ## EnTT Integration
 

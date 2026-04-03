@@ -2556,3 +2556,372 @@ TEST_CASE("generate_batch_async observer hooks fire",
 
     REQUIRE(obs->count == 5);
 }
+
+// ---------------------------------------------------------------------------
+// Generic components: constant_component
+// ---------------------------------------------------------------------------
+
+TEST_CASE("constant_component returns fixed value", "[generic][constant]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::constant_component<int>>(L"ver", 42));
+
+    auto e = gen.generate();
+    REQUIRE(e.get<int>(L"ver") == 42);
+}
+
+TEST_CASE("constant_component with wstring", "[generic][constant]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::constant_component<std::wstring>>(
+        L"label", L"hello"));
+
+    auto e = gen.generate();
+    REQUIRE(e.get<std::wstring>(L"label") == L"hello");
+}
+
+TEST_CASE("constant_component default to_string", "[generic][constant]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::constant_component<int>>(L"n", 7));
+
+    auto m = gen.generate().to_map();
+    REQUIRE(m.at(L"n") == L"7");
+}
+
+TEST_CASE("constant_component custom formatter", "[generic][constant]")
+{
+    auto fmt = [](int v) { return L"#" + std::to_wstring(v); };
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::constant_component<int, decltype(fmt)>>(
+        L"id", 5, fmt));
+
+    auto m = gen.generate().to_map();
+    REQUIRE(m.at(L"id") == L"#5");
+}
+
+TEST_CASE("constant_component seeded is reproducible", "[generic][constant][seed]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::constant_component<double>>(L"pi", 3.14));
+
+    auto e1 = gen.generate(99);
+    auto e2 = gen.generate(99);
+    REQUIRE(e1.get<double>(L"pi") == e2.get<double>(L"pi"));
+}
+
+// ---------------------------------------------------------------------------
+// Generic components: choice_component
+// ---------------------------------------------------------------------------
+
+TEST_CASE("choice_component picks from list", "[generic][choice]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::choice_component<std::wstring>>(
+        L"color", std::vector<std::wstring>{L"red", L"green", L"blue"}));
+
+    auto e = gen.generate();
+    auto val = e.get<std::wstring>(L"color");
+    REQUIRE((val == L"red" || val == L"green" || val == L"blue"));
+}
+
+TEST_CASE("choice_component with int", "[generic][choice]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::choice_component<int>>(
+        L"die", std::vector<int>{1, 2, 3, 4, 5, 6}));
+
+    auto e = gen.generate();
+    auto val = e.get<int>(L"die");
+    REQUIRE(val >= 1);
+    REQUIRE(val <= 6);
+}
+
+TEST_CASE("choice_component seeded is deterministic", "[generic][choice][seed]")
+{
+    auto make = [] {
+        dasmig::eg gen;
+        gen.add(std::make_unique<dasmig::choice_component<std::wstring>>(
+            L"x", std::vector<std::wstring>{L"a", L"b", L"c", L"d"}));
+        return gen.generate(42);
+    };
+
+    REQUIRE(make().get<std::wstring>(L"x") ==
+            make().get<std::wstring>(L"x"));
+}
+
+TEST_CASE("choice_component custom formatter", "[generic][choice]")
+{
+    auto fmt = [](int v) { return L"[" + std::to_wstring(v) + L"]"; };
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::choice_component<int, decltype(fmt)>>(
+        L"pick", std::vector<int>{10, 20}, fmt));
+
+    auto m = gen.generate().to_map();
+    auto display = m.at(L"pick");
+    REQUIRE((display == L"[10]" || display == L"[20]"));
+}
+
+// ---------------------------------------------------------------------------
+// Generic components: range_component
+// ---------------------------------------------------------------------------
+
+TEST_CASE("range_component int in bounds", "[generic][range]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::range_component<int>>(L"age", 18, 65));
+
+    for (int i = 0; i < 20; ++i)
+    {
+        auto e = gen.generate();
+        REQUIRE(e.get<int>(L"age") >= 18);
+        REQUIRE(e.get<int>(L"age") <= 65);
+    }
+}
+
+TEST_CASE("range_component double in bounds", "[generic][range]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::range_component<double>>(
+        L"pct", 0.0, 1.0));
+
+    for (int i = 0; i < 20; ++i)
+    {
+        auto e = gen.generate();
+        REQUIRE(e.get<double>(L"pct") >= 0.0);
+        REQUIRE(e.get<double>(L"pct") <= 1.0);
+    }
+}
+
+TEST_CASE("range_component seeded is deterministic", "[generic][range][seed]")
+{
+    auto make = [] {
+        dasmig::eg gen;
+        gen.add(std::make_unique<dasmig::range_component<int>>(L"v", 1, 10000));
+        return gen.generate(42);
+    };
+
+    REQUIRE(make().get<int>(L"v") == make().get<int>(L"v"));
+}
+
+TEST_CASE("range_component default to_string", "[generic][range]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::range_component<int>>(L"n", 5, 5));
+
+    auto m = gen.generate().to_map();
+    REQUIRE(m.at(L"n") == L"5");
+}
+
+TEST_CASE("range_component custom formatter", "[generic][range]")
+{
+    auto fmt = [](int v) { return L"lv" + std::to_wstring(v); };
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::range_component<int, decltype(fmt)>>(
+        L"level", 1, 1, fmt));
+
+    auto m = gen.generate().to_map();
+    REQUIRE(m.at(L"level") == L"lv1");
+}
+
+// ---------------------------------------------------------------------------
+// Generic components: callback_component
+// ---------------------------------------------------------------------------
+
+// Type alias: callback_component using std::function (CTAD doesn't work
+// with make_unique, so we spell the type explicitly).
+template <typename T>
+using cb_component = dasmig::callback_component<T,
+    std::function<T(const dasmig::generation_context&)>>;
+
+TEST_CASE("callback_component simple lambda", "[generic][callback]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<cb_component<std::wstring>>(
+        L"msg", [](const dasmig::generation_context&) -> std::wstring {
+            return L"hello";
+        }));
+
+    REQUIRE(gen.generate().get<std::wstring>(L"msg") == L"hello");
+}
+
+TEST_CASE("callback_component reads context", "[generic][callback]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::constant_component<int>>(L"base", 10));
+    gen.add(std::make_unique<cb_component<int>>(
+        L"doubled", [](const dasmig::generation_context& ctx) -> int {
+            return ctx.get<int>(L"base") * 2;
+        }));
+
+    REQUIRE(gen.generate().get<int>(L"doubled") == 20);
+}
+
+TEST_CASE("callback_component uses ctx random", "[generic][callback]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<cb_component<int>>(
+        L"roll", [](const dasmig::generation_context& ctx) -> int {
+            return ctx.random().get(1, 6);
+        }));
+
+    auto val = gen.generate().get<int>(L"roll");
+    REQUIRE(val >= 1);
+    REQUIRE(val <= 6);
+}
+
+TEST_CASE("callback_component seeded is deterministic", "[generic][callback][seed]")
+{
+    auto make = [] {
+        dasmig::eg gen;
+        gen.add(std::make_unique<cb_component<int>>(
+            L"r", [](const dasmig::generation_context& ctx) -> int {
+                return ctx.random().get(1, 10000);
+            }));
+        return gen.generate(42);
+    };
+
+    REQUIRE(make().get<int>(L"r") == make().get<int>(L"r"));
+}
+
+TEST_CASE("callback_component custom formatter", "[generic][callback]")
+{
+    auto fmt = [](int v) { return L"=" + std::to_wstring(v); };
+    using cb_fmt = dasmig::callback_component<int,
+        std::function<int(const dasmig::generation_context&)>, decltype(fmt)>;
+    dasmig::eg gen;
+    gen.add(std::make_unique<cb_fmt>(
+        L"x",
+        [](const dasmig::generation_context&) -> int { return 9; },
+        fmt));
+
+    auto m = gen.generate().to_map();
+    REQUIRE(m.at(L"x") == L"=9");
+}
+
+// ---------------------------------------------------------------------------
+// Generic components: weighted_choice_component
+// ---------------------------------------------------------------------------
+
+TEST_CASE("weighted_choice_component picks from options",
+          "[generic][weighted_choice]")
+{
+    using wc = dasmig::weighted_choice_component<std::wstring>;
+    dasmig::eg gen;
+    gen.add(std::make_unique<wc>(
+        L"rarity", std::vector<wc::option>{
+            {L"common", 70.0}, {L"rare", 25.0}, {L"legendary", 5.0}}));
+
+    auto e = gen.generate();
+    auto val = e.get<std::wstring>(L"rarity");
+    REQUIRE((val == L"common" || val == L"rare" || val == L"legendary"));
+}
+
+TEST_CASE("weighted_choice_component respects weights",
+          "[generic][weighted_choice]")
+{
+    // Weight 0 means "never selected".
+    using wc = dasmig::weighted_choice_component<int>;
+    dasmig::eg gen;
+    gen.add(std::make_unique<wc>(
+        L"v", std::vector<wc::option>{{1, 0.0}, {2, 1.0}}));
+
+    for (int i = 0; i < 30; ++i)
+    {
+        REQUIRE(gen.generate().get<int>(L"v") == 2);
+    }
+}
+
+TEST_CASE("weighted_choice_component single option always picked",
+          "[generic][weighted_choice]")
+{
+    using wc = dasmig::weighted_choice_component<std::wstring>;
+    dasmig::eg gen;
+    gen.add(std::make_unique<wc>(
+        L"only", std::vector<wc::option>{{L"sole", 1.0}}));
+
+    REQUIRE(gen.generate().get<std::wstring>(L"only") == L"sole");
+}
+
+TEST_CASE("weighted_choice_component seeded is deterministic",
+          "[generic][weighted_choice][seed]")
+{
+    using wc = dasmig::weighted_choice_component<int>;
+    auto make = [] {
+        dasmig::eg gen;
+        gen.add(std::make_unique<wc>(
+            L"n", std::vector<wc::option>{{1, 1.0}, {2, 1.0}, {3, 1.0}}));
+        return gen.generate(42);
+    };
+
+    REQUIRE(make().get<int>(L"n") == make().get<int>(L"n"));
+}
+
+TEST_CASE("weighted_choice_component custom formatter",
+          "[generic][weighted_choice]")
+{
+    using wc = dasmig::weighted_choice_component<int,
+        std::function<std::wstring(int)>>;
+    auto fmt = [](int v) { return L"w" + std::to_wstring(v); };
+    dasmig::eg gen;
+    gen.add(std::make_unique<wc>(
+        L"x", std::vector<wc::option>{{7, 1.0}}, fmt));
+
+    auto m = gen.generate().to_map();
+    REQUIRE(m.at(L"x") == L"w7");
+}
+
+TEST_CASE("weighted_choice_component default to_string",
+          "[generic][weighted_choice]")
+{
+    using wc = dasmig::weighted_choice_component<int>;
+    dasmig::eg gen;
+    gen.add(std::make_unique<wc>(
+        L"n", std::vector<wc::option>{{42, 1.0}}));
+
+    auto m = gen.generate().to_map();
+    REQUIRE(m.at(L"n") == L"42");
+}
+
+// ---------------------------------------------------------------------------
+// Generic components: interop with generator features
+// ---------------------------------------------------------------------------
+
+TEST_CASE("generic components work with batch generation",
+          "[generic][batch]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::range_component<int>>(L"hp", 1, 100));
+    gen.add(std::make_unique<dasmig::choice_component<std::wstring>>(
+        L"class", std::vector<std::wstring>{L"A", L"B"}));
+
+    auto batch = gen.generate_batch(5);
+    REQUIRE(batch.size() == 5);
+    for (const auto& e : batch)
+    {
+        REQUIRE(e.has(L"hp"));
+        REQUIRE(e.has(L"class"));
+    }
+}
+
+TEST_CASE("generic components work with groups", "[generic][group]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::constant_component<int>>(L"a", 1));
+    gen.add(std::make_unique<dasmig::range_component<int>>(L"b", 1, 10));
+    gen.add_group(L"grp", {L"a"});
+
+    auto e = gen.generate_group(L"grp");
+    REQUIRE(e.has(L"a"));
+    REQUIRE_FALSE(e.has(L"b"));
+}
+
+TEST_CASE("generic components work with weight overrides",
+          "[generic][weight]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::constant_component<int>>(L"x", 1), 0.0);
+
+    auto e = gen.generate();
+    REQUIRE_FALSE(e.has(L"x"));
+}

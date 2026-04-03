@@ -10,6 +10,8 @@
 
 - **Core** — Generate entities composed of user-defined components. Each component produces a typed random value accessible via `entity.get<T>(key)`. Register, remove, and generate with fluent chaining.
 
+- **Generic Components** — Ready-made templates for common patterns: `constant_component<T>`, `choice_component<T>`, `range_component<T>`, `callback_component`, and `weighted_choice_component<T>`. All accept an optional custom formatter.
+
 - **Randomness & Replay** — Deterministic seeding at per-call and generator level. Every entity and component stores its seed for full replay via seed signatures.
 
 - **Advanced Generation** — Batch generation (synchronous and concurrent), named component groups, selective generation by key subset, component weights for probabilistic inclusion, and conditional components for logic-driven inclusion via `should_generate(ctx)`.

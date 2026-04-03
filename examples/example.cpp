@@ -336,5 +336,45 @@ int main()
                    << L"  " << ab1[i] << L'\n';
     }
 
+    // Generic components: no subclassing needed.
+    std::wcout << L"\n--- Generic components ---\n";
+    dasmig::eg item_gen;
+
+    // constant_component: fixed value.
+    item_gen.add(std::make_unique<dasmig::constant_component<std::wstring>>(
+        L"type", L"Sword"));
+
+    // choice_component: pick from a list.
+    item_gen.add(std::make_unique<dasmig::choice_component<std::wstring>>(
+        L"prefix", std::vector<std::wstring>{
+            L"Rusty", L"Shiny", L"Ancient", L"Enchanted"}));
+
+    // range_component: random in a numeric range.
+    item_gen.add(std::make_unique<dasmig::range_component<int>>(
+        L"damage", 5, 50));
+
+    // weighted_choice_component: weighted random pick.
+    using rarity_t = dasmig::weighted_choice_component<std::wstring>;
+    item_gen.add(std::make_unique<rarity_t>(
+        L"rarity", std::vector<rarity_t::option>{
+            {L"Common", 60.0}, {L"Uncommon", 25.0},
+            {L"Rare", 10.0}, {L"Legendary", 5.0}}));
+
+    // callback_component: computed from context, no class needed.
+    using cb_wstr = dasmig::callback_component<std::wstring,
+        std::function<std::wstring(const dasmig::generation_context&)>>;
+    item_gen.add(std::make_unique<cb_wstr>(
+        L"description",
+        [](const dasmig::generation_context& ctx) -> std::wstring {
+            return ctx.get<std::wstring>(L"prefix") + L" "
+                 + ctx.get<std::wstring>(L"type") + L" ("
+                 + std::to_wstring(ctx.get<int>(L"damage")) + L" dmg)";
+        }));
+
+    for (std::size_t i = 0; i < 5; i++)
+    {
+        std::wcout << item_gen.generate() << L'\n';
+    }
+
     return 0;
 }

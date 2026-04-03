@@ -21,6 +21,7 @@ This guide covers every feature of the entity-generator library in detail. For a
 - [Validation Hooks](#validation-hooks)
 - [Event Hooks](#event-hooks)
 - [Conditional Components](#conditional-components)
+- [Generic Components](#generic-components)
 
 ## Defining Components
 
@@ -507,3 +508,73 @@ class warrior_title : public dasmig::component
 When `should_generate` returns `false`, the component is skipped entirely — no value is produced and `entity.has(key)` returns `false`. The skip fires the same observer hooks as a weight skip (`on_before_skip` / `on_after_skip`).
 
 **Note:** `should_generate` is checked after the weight roll. If a component is excluded by weight, `should_generate` is never called.
+
+## Generic Components
+
+Five reusable class templates for the most common component patterns. All live in the `dasmig::` namespace and accept an optional custom formatter as a trailing template parameter.
+
+### constant_component&lt;T&gt;
+
+Always returns the same value.
+
+```cpp
+gen.add(std::make_unique<dasmig::constant_component<int>>(L"version", 1));
+gen.add(std::make_unique<dasmig::constant_component<std::wstring>>(
+    L"label", L"npc"));
+```
+
+### choice_component&lt;T&gt;
+
+Picks uniformly at random from a list.
+
+```cpp
+gen.add(std::make_unique<dasmig::choice_component<std::wstring>>(
+    L"class", std::vector<std::wstring>{L"Warrior", L"Mage", L"Rogue"}));
+```
+
+### range_component&lt;T&gt;
+
+Uniform random in a numeric range `[lo, hi]`. Restricted to arithmetic types.
+
+```cpp
+gen.add(std::make_unique<dasmig::range_component<int>>(L"age", 18, 65));
+gen.add(std::make_unique<dasmig::range_component<double>>(L"luck", 0.0, 1.0));
+```
+
+### callback_component
+
+Wraps a callable that takes `generation_context&` and returns a value. Avoids subclassing for one-off or context-dependent components. Use `std::function` to erase the callable type for `make_unique`.
+
+```cpp
+using cb_wstr = dasmig::callback_component<std::wstring,
+    std::function<std::wstring(const dasmig::generation_context&)>>;
+gen.add(std::make_unique<cb_wstr>(
+    L"greeting", [](const dasmig::generation_context& ctx) -> std::wstring {
+        return L"Hello, " + ctx.get<std::wstring>(L"name") + L"!";
+    }));
+```
+
+A CTAD deduction guide is provided for stack-allocated usage where `make_unique` is not needed.
+
+### weighted_choice_component&lt;T&gt;
+
+Picks from a list of values using per-option weights. Weights are relative (they don't need to sum to 1.0). A weight of 0 means the option is never selected.
+
+```cpp
+using rarity_t = dasmig::weighted_choice_component<std::wstring>;
+gen.add(std::make_unique<rarity_t>(
+    L"rarity", std::vector<rarity_t::option>{
+        {L"Common", 60.0}, {L"Uncommon", 25.0},
+        {L"Rare", 10.0}, {L"Legendary", 5.0}}));
+```
+
+### Custom formatters
+
+All generic components use `default_to_string` by default. Pass a custom formatter as an extra template parameter and constructor argument for types it doesn't handle:
+
+```cpp
+auto fmt = [](int v) { return L"#" + std::to_wstring(v); };
+gen.add(std::make_unique<dasmig::constant_component<int, decltype(fmt)>>(
+    L"id", 5, fmt));
+// to_map()["id"] == "#5"
+```

@@ -15,6 +15,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 // Written by Diego Dasso Migotto - diegomigotto at hotmail dot com
@@ -131,6 +132,199 @@ class component
 
         return L"[?]";
     }
+};
+
+// ---------------------------------------------------------------------------
+// Generic components — reusable templates for common patterns.
+// ---------------------------------------------------------------------------
+
+// Tag type indicating that generic components should use default_to_string.
+struct use_default_formatter {};
+
+// Component that always returns the same value.
+template <typename T, typename Formatter = use_default_formatter>
+class constant_component : public component
+{
+  public:
+    explicit constant_component(std::wstring key, T value,
+                                Formatter fmt = {})
+        : _key{std::move(key)}, _value{std::move(value)},
+          _fmt{std::move(fmt)} {}
+
+    [[nodiscard]] std::wstring key() const override { return _key; }
+
+    [[nodiscard]] std::any generate(
+        const generation_context& /*ctx*/) const override
+    {
+        return _value;
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        if constexpr (std::is_same_v<Formatter, use_default_formatter>)
+            return default_to_string(value);
+        else
+            return _fmt(std::any_cast<T>(value));
+    }
+
+  private:
+    std::wstring _key;
+    T _value;
+    Formatter _fmt;
+};
+
+// Component that picks uniformly at random from a list of values.
+template <typename T, typename Formatter = use_default_formatter>
+class choice_component : public component
+{
+  public:
+    explicit choice_component(std::wstring key, std::vector<T> choices,
+                              Formatter fmt = {})
+        : _key{std::move(key)}, _choices{std::move(choices)},
+          _fmt{std::move(fmt)} {}
+
+    [[nodiscard]] std::wstring key() const override { return _key; }
+
+    [[nodiscard]] std::any generate(
+        const generation_context& ctx) const override
+    {
+        return *ctx.random().get(_choices);
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        if constexpr (std::is_same_v<Formatter, use_default_formatter>)
+            return default_to_string(value);
+        else
+            return _fmt(std::any_cast<T>(value));
+    }
+
+  private:
+    std::wstring _key;
+    std::vector<T> _choices;
+    Formatter _fmt;
+};
+
+// Component that generates a uniform random value in [lo, hi].
+// Restricted to arithmetic types (int, double, float, etc.).
+template <typename T, typename Formatter = use_default_formatter>
+    requires std::is_arithmetic_v<T>
+class range_component : public component
+{
+  public:
+    explicit range_component(std::wstring key, T lo, T hi,
+                             Formatter fmt = {})
+        : _key{std::move(key)}, _lo{lo}, _hi{hi}, _fmt{std::move(fmt)} {}
+
+    [[nodiscard]] std::wstring key() const override { return _key; }
+
+    [[nodiscard]] std::any generate(
+        const generation_context& ctx) const override
+    {
+        return ctx.random().get(_lo, _hi);
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        if constexpr (std::is_same_v<Formatter, use_default_formatter>)
+            return default_to_string(value);
+        else
+            return _fmt(std::any_cast<T>(value));
+    }
+
+  private:
+    std::wstring _key;
+    T _lo;
+    T _hi;
+    Formatter _fmt;
+};
+
+// Component that wraps a callable taking generation_context and returning T.
+// Avoids subclassing entirely for one-off or computed components.
+template <typename T, typename GenFn, typename Formatter = use_default_formatter>
+class callback_component : public component
+{
+  public:
+    explicit callback_component(std::wstring key, GenFn fn,
+                                Formatter fmt = {})
+        : _key{std::move(key)}, _fn{std::move(fn)}, _fmt{std::move(fmt)} {}
+
+    [[nodiscard]] std::wstring key() const override { return _key; }
+
+    [[nodiscard]] std::any generate(
+        const generation_context& ctx) const override
+    {
+        return _fn(ctx);
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        if constexpr (std::is_same_v<Formatter, use_default_formatter>)
+            return default_to_string(value);
+        else
+            return _fmt(std::any_cast<T>(value));
+    }
+
+  private:
+    std::wstring _key;
+    GenFn _fn;
+    Formatter _fmt;
+};
+
+// Deduction guide for callback_component so users don't need to spell
+// the lambda type.
+template <typename GenFn, typename Formatter = use_default_formatter>
+callback_component(std::wstring, GenFn, Formatter = {})
+    -> callback_component<
+           std::invoke_result_t<GenFn, const generation_context&>,
+           GenFn, Formatter>;
+
+// Component that picks from a list of values using per-option weights.
+// Weights are relative (they don't need to sum to 1.0). A weight of 0
+// means the option is never selected.
+template <typename T, typename Formatter = use_default_formatter>
+class weighted_choice_component : public component
+{
+  public:
+    struct option
+    {
+        T value;
+        double weight;
+    };
+
+    explicit weighted_choice_component(std::wstring key,
+                                       std::vector<option> options,
+                                       Formatter fmt = {})
+        : _key{std::move(key)}, _options{std::move(options)},
+          _fmt{std::move(fmt)} {}
+
+    [[nodiscard]] std::wstring key() const override { return _key; }
+
+    [[nodiscard]] std::any generate(
+        const generation_context& ctx) const override
+    {
+        std::vector<double> weights;
+        weights.reserve(_options.size());
+        std::ranges::transform(_options, std::back_inserter(weights),
+            &option::weight);
+
+        std::discrete_distribution<std::size_t> dist(
+            weights.begin(), weights.end());
+        return _options[dist(ctx.random().engine())].value;
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        if constexpr (std::is_same_v<Formatter, use_default_formatter>)
+            return default_to_string(value);
+        else
+            return _fmt(std::any_cast<T>(value));
+    }
+
+  private:
+    std::wstring _key;
+    std::vector<option> _options;
+    Formatter _fmt;
 };
 
 // Internal class representing a generated entity. Holds component values
