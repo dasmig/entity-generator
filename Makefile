@@ -1,5 +1,5 @@
 CXX      := clang++
-CXXFLAGS := -std=c++23 -Wall -Wextra -Wpedantic -I.
+CXXFLAGS := -std=c++23 -Wall -Wextra -Wpedantic -Wno-c2y-extensions -I.
 BUILD    := build
 
 EXAMPLE_SRC := examples/example.cpp
@@ -28,8 +28,8 @@ coverage: $(TEST_SRC) dasmig/entitygen.hpp dasmig/random.hpp | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COV_FLAGS) -o $(BUILD)/test_cov $(TEST_SRC)
 	cd $(BUILD) && ./test_cov
 	llvm-profdata merge -sparse $(BUILD)/default.profraw -o $(BUILD)/tests.profdata
-	llvm-cov report $(BUILD)/test_cov --instr-profile=$(BUILD)/tests.profdata --sources dasmig/entitygen.hpp
-	llvm-cov show $(BUILD)/test_cov --instr-profile=$(BUILD)/tests.profdata --sources dasmig/entitygen.hpp --format=html -o $(COV_DIR)
+	llvm-cov report $(BUILD)/test_cov --instr-profile=$(BUILD)/tests.profdata --sources dasmig/entitygen.hpp dasmig/ext/stats_observer.hpp
+	llvm-cov show $(BUILD)/test_cov --instr-profile=$(BUILD)/tests.profdata --sources dasmig/entitygen.hpp dasmig/ext/stats_observer.hpp --format=html -o $(COV_DIR)
 	@echo "Coverage report: $(COV_DIR)/index.html"
 
 $(BUILD):
