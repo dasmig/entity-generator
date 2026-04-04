@@ -2,14 +2,6 @@
 
 Planned features for the entity-generator library. Items are not in priority order.
 
-## ~~EnTT Integration~~
-
-Adapter layer (`dasmig/ext/entt_adapter.hpp`) bridges entity-generator with [EnTT](https://github.com/skypjack/entt). Users register key→component mappings, then `spawn()` creates typed EnTT entities from generated output.
-
-## ~~Flecs Integration~~
-
-Adapter layer (`dasmig/ext/flecs_adapter.hpp`) bridges entity-generator with [Flecs](https://github.com/SanderMertens/flecs). Same mapping pattern as the EnTT adapter, using Flecs' `set<T>()` API.
-
 ## Python Wrapper
 
 A Python binding (via pybind11 or nanobind) exposing the entity-generator API to Python. Components are defined as Python classes inheriting from a base, registered with the generator, and entities are returned as typed Python objects. Enables rapid prototyping and scripting of entity generation logic.
