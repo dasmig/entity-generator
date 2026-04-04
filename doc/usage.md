@@ -594,7 +594,7 @@ Optional headers in `dasmig/ext/` provide ready-made functionality built on the 
 
 `#include <dasmig/ext/stats_observer.hpp>`
 
-Tracks aggregate generation statistics. Attach it like any other observer; read the counters after generation.
+Tracks comprehensive generation statistics: counts, timing, per-component breakdowns, and value distributions. Attach it like any other observer; read the fields after generation.
 
 ```cpp
 auto stats = std::make_shared<dasmig::ext::stats_observer>();
@@ -607,21 +607,87 @@ std::wcout << L"Entities:   " << stats->entities_generated  << L'\n'
            << L"Skipped:    " << stats->components_skipped   << L'\n'
            << L"Failures:   " << stats->component_failures   << L'\n';
 
+// Per-key counts.
+for (const auto& [key, n] : stats->component_counts)
+    std::wcout << key << L": " << n << L" generated\n";
+
 // Per-key retry counts.
 for (const auto& [key, n] : stats->component_retries)
-    std::wcout << key << L" retries: " << n << L'\n';
+    std::wcout << key << L": " << n << L" retries\n";
+
+// Timing.
+using ms = std::chrono::milliseconds;
+std::wcout << L"Avg entity: "
+           << std::chrono::duration_cast<ms>(stats->avg_entity_time()).count()
+           << L" ms\n";
+for (const auto& [key, _] : stats->component_counts)
+    std::wcout << key << L" avg: "
+               << std::chrono::duration_cast<ms>(
+                      stats->avg_component_time(key)).count()
+               << L" ms\n";
+
+// Value distribution.
+for (const auto& [key, dist] : stats->value_distribution)
+    for (const auto& [val, count] : dist)
+        std::wcout << key << L"=" << val << L": " << count << L'\n';
 
 stats->reset(); // zeroes all counters
 ```
 
-**Counters:**
+**Entity counters:**
 
-| Counter | Incremented by |
+| Field | Description |
 |---|---|
-| `entities_generated` | `on_after_generate` — each successful entity |
-| `entity_retries` | `on_after_entity_retry` — each entity-level retry |
-| `entity_failures` | `on_entity_fail` — entity validation exhausted |
-| `components_generated` | `on_after_component` — each successful component |
-| `components_skipped` | `on_skip` — weight or conditional skip |
-| `component_failures` | `on_component_fail` — component retries exhausted |
-| `component_retries` | `on_after_retry` — map from key to retry count |
+| `entities_generated` | Successful entities produced |
+| `entity_retries` | Entity-level validation retries |
+| `entity_failures` | Entity validation exhausted (threw) |
+
+**Component counters:**
+
+| Field | Description |
+|---|---|
+| `components_generated` | Total component values produced |
+| `components_skipped` | Weight or conditional skips |
+| `component_failures` | Component validation exhausted (threw) |
+
+**Per-component-key maps (all `std::map<std::wstring, …>`):**
+
+| Field | Value type | Description |
+|---|---|---|
+| `component_counts` | `size_t` | Times each key was generated |
+| `component_skip_counts` | `size_t` | Times each key was skipped |
+| `component_failure_counts` | `size_t` | Times each key failed |
+| `component_retries` | `size_t` | Total retries per key |
+| `component_times` | `duration` | Cumulative wall-clock per key |
+| `component_min_times` | `duration` | Fastest generation per key |
+| `component_max_times` | `duration` | Slowest generation per key |
+
+**Entity timing:**
+
+| Field | Description |
+|---|---|
+| `total_generation_time` | Sum of wall-clock across all entities |
+| `min_entity_time` | Fastest entity generation |
+| `max_entity_time` | Slowest entity generation |
+
+**Components-per-entity:**
+
+| Field | Description |
+|---|---|
+| `min_components_per_entity` | Fewest components in a single entity |
+| `max_components_per_entity` | Most components in a single entity |
+| `total_components_in_entities` | Sum for computing averages |
+
+**Value distribution:**
+
+`value_distribution` is a `map<wstring, map<wstring, size_t>>` — for each component key, counts how many times each display value appeared. Common `std::any` types (`wstring`, `int`, `double`, `float`, `long`, `bool`) are stringified automatically; others record as `<other>`.
+
+**Computed helpers:**
+
+| Method | Returns |
+|---|---|
+| `avg_entity_time()` | `total_generation_time / entities_generated` |
+| `avg_component_time(key)` | per-key average generation time |
+| `avg_components_per_entity()` | `double` average |
+| `component_retry_rate()` | total retries / components generated |
+| `entity_retry_rate()` | entity retries / entities generated |

@@ -378,13 +378,10 @@ int main()
     }
 
     // Generation statistics observer.
-    std::wcout << L"\n--- Generation statistics ---\n";
     auto stats = std::make_shared<dasmig::ext::stats_observer>();
     dasmig::eg::instance().add_observer(stats);
     dasmig::eg::instance().generate_batch(10);
-    std::wcout << L"Entities:   " << stats->entities_generated << L'\n';
-    std::wcout << L"Components: " << stats->components_generated << L'\n';
-    std::wcout << L"Skipped:    " << stats->components_skipped << L'\n';
+    std::wcout << L'\n' << stats->report();
     dasmig::eg::instance().remove_observer(stats);
 
     return 0;

@@ -3113,6 +3113,29 @@ TEST_CASE("stats_observer reset clears all counters", "[ext][stats]")
     REQUIRE(stats->component_failures == 0);
     REQUIRE(stats->entity_retries == 0);
     REQUIRE(stats->entity_failures == 0);
+
+    // Timing fields.
+    using dur = dasmig::ext::stats_observer::duration;
+    REQUIRE(stats->total_generation_time == dur::zero());
+    REQUIRE(stats->min_entity_time == dur::max());
+    REQUIRE(stats->max_entity_time == dur::zero());
+
+    // Per-key maps.
+    REQUIRE(stats->component_counts.empty());
+    REQUIRE(stats->component_skip_counts.empty());
+    REQUIRE(stats->component_failure_counts.empty());
+    REQUIRE(stats->component_times.empty());
+    REQUIRE(stats->component_min_times.empty());
+    REQUIRE(stats->component_max_times.empty());
+
+    // Components per entity.
+    REQUIRE(stats->min_components_per_entity ==
+            std::numeric_limits<std::size_t>::max());
+    REQUIRE(stats->max_components_per_entity == 0);
+    REQUIRE(stats->total_components_in_entities == 0);
+
+    // Value distribution.
+    REQUIRE(stats->value_distribution.empty());
 }
 
 TEST_CASE("stats_observer works alongside other observers",
@@ -3142,4 +3165,440 @@ TEST_CASE("stats_observer conditional skip counted", "[ext][stats][conditional]"
 
     REQUIRE(stats->components_skipped == 1);
     REQUIRE(stats->components_generated == 0);
+}
+
+// ---------------------------------------------------------------------------
+// stats_observer: timing
+// ---------------------------------------------------------------------------
+
+TEST_CASE("stats_observer tracks total generation time", "[ext][stats][timing]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    gen.generate_batch(5);
+
+    REQUIRE(stats->total_generation_time >
+            dasmig::ext::stats_observer::duration::zero());
+}
+
+TEST_CASE("stats_observer tracks min and max entity time",
+          "[ext][stats][timing]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    gen.generate_batch(10);
+
+    REQUIRE(stats->min_entity_time <=
+            stats->max_entity_time);
+    REQUIRE(stats->min_entity_time !=
+            dasmig::ext::stats_observer::duration::max());
+}
+
+TEST_CASE("stats_observer avg_entity_time computed correctly",
+          "[ext][stats][timing]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    gen.generate_batch(4);
+
+    auto avg = stats->avg_entity_time();
+    REQUIRE(avg > dasmig::ext::stats_observer::duration::zero());
+    REQUIRE(avg <= stats->total_generation_time);
+}
+
+TEST_CASE("stats_observer avg_entity_time zero when no entities",
+          "[ext][stats][timing]")
+{
+    dasmig::ext::stats_observer stats;
+    REQUIRE(stats.avg_entity_time() ==
+            dasmig::ext::stats_observer::duration::zero());
+}
+
+// ---------------------------------------------------------------------------
+// stats_observer: per-component-key timing
+// ---------------------------------------------------------------------------
+
+TEST_CASE("stats_observer tracks per-component-key time",
+          "[ext][stats][timing]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"A"));
+    gen.add(std::make_unique<string_component>(L"b", L"B"));
+
+    gen.generate();
+
+    REQUIRE(stats->component_times.contains(L"a"));
+    REQUIRE(stats->component_times.contains(L"b"));
+}
+
+TEST_CASE("stats_observer per-component min/max initialise on first call",
+          "[ext][stats][timing]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"x", L"val"));
+
+    gen.generate();
+
+    REQUIRE(stats->component_min_times.at(L"x") ==
+            stats->component_max_times.at(L"x"));
+}
+
+TEST_CASE("stats_observer avg_component_time helper",
+          "[ext][stats][timing]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"c", L"val"));
+
+    gen.generate_batch(5);
+
+    auto avg = stats->avg_component_time(L"c");
+    REQUIRE(avg > dasmig::ext::stats_observer::duration::zero());
+    REQUIRE(avg <= stats->component_times.at(L"c"));
+}
+
+TEST_CASE("stats_observer avg_component_time zero for unknown key",
+          "[ext][stats][timing]")
+{
+    dasmig::ext::stats_observer stats;
+    REQUIRE(stats.avg_component_time(L"nope") ==
+            dasmig::ext::stats_observer::duration::zero());
+}
+
+// ---------------------------------------------------------------------------
+// stats_observer: per-key counts
+// ---------------------------------------------------------------------------
+
+TEST_CASE("stats_observer per-key generation counts", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"A"));
+    gen.add(std::make_unique<string_component>(L"b", L"B"));
+
+    gen.generate_batch(3);
+
+    REQUIRE(stats->component_counts.at(L"a") == 3);
+    REQUIRE(stats->component_counts.at(L"b") == 3);
+}
+
+TEST_CASE("stats_observer per-key skip counts", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"A"), 0.0);
+
+    gen.generate_batch(3);
+
+    REQUIRE(stats->component_skip_counts.at(L"a") == 3);
+}
+
+TEST_CASE("stats_observer per-key failure counts", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<always_invalid_component>(L"bad"));
+    gen.max_retries(2);
+
+    REQUIRE_THROWS(gen.generate());
+
+    REQUIRE(stats->component_failure_counts.at(L"bad") == 1);
+}
+
+// ---------------------------------------------------------------------------
+// stats_observer: components per entity
+// ---------------------------------------------------------------------------
+
+TEST_CASE("stats_observer tracks components per entity", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"A"));
+    gen.add(std::make_unique<string_component>(L"b", L"B"));
+
+    gen.generate_batch(3);
+
+    REQUIRE(stats->min_components_per_entity == 2);
+    REQUIRE(stats->max_components_per_entity == 2);
+    REQUIRE(stats->total_components_in_entities == 6);
+}
+
+TEST_CASE("stats_observer avg_components_per_entity helper", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"A"));
+    gen.add(std::make_unique<string_component>(L"b", L"B"));
+
+    gen.generate();
+
+    REQUIRE(stats->avg_components_per_entity() == Catch::Approx(2.0));
+}
+
+TEST_CASE("stats_observer avg_components_per_entity zero when empty",
+          "[ext][stats]")
+{
+    dasmig::ext::stats_observer stats;
+    REQUIRE(stats.avg_components_per_entity() == Catch::Approx(0.0));
+}
+
+// ---------------------------------------------------------------------------
+// stats_observer: value distribution
+// ---------------------------------------------------------------------------
+
+TEST_CASE("stats_observer value distribution for string component",
+          "[ext][stats][distribution]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"name", L"Alice"));
+
+    gen.generate_batch(5);
+
+    REQUIRE(stats->value_distribution.contains(L"name"));
+    REQUIRE(stats->value_distribution.at(L"name").at(L"Alice") == 5);
+}
+
+TEST_CASE("stats_observer value distribution for int component",
+          "[ext][stats][distribution]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<int_component>(L"age", 30));
+
+    gen.generate_batch(3);
+
+    REQUIRE(stats->value_distribution.contains(L"age"));
+    REQUIRE(stats->value_distribution.at(L"age").at(L"30") == 3);
+}
+
+TEST_CASE("stats_observer value distribution tracks multiple values",
+          "[ext][stats][distribution]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<random_int_component>(L"v", 1, 3));
+
+    gen.generate_batch(100);
+
+    auto& dist = stats->value_distribution.at(L"v");
+    // With range [1,3] and 100 draws, all three values should appear.
+    REQUIRE(dist.size() >= 2);
+    std::size_t total{0};
+    for (const auto& [_, n] : dist) total += n;
+    REQUIRE(total == 100);
+}
+
+// ---------------------------------------------------------------------------
+// stats_observer: rate helpers
+// ---------------------------------------------------------------------------
+
+TEST_CASE("stats_observer component_retry_rate helper", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<even_only_component>());
+    gen.max_retries(100);
+
+    gen.generate_batch(10);
+
+    // Rate >= 0.0. Even if no retries happened, the function returns 0.
+    REQUIRE(stats->component_retry_rate() >= 0.0);
+    REQUIRE(stats->components_generated == 10);
+}
+
+TEST_CASE("stats_observer entity_retry_rate helper", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    gen.generate_batch(5);
+
+    // No entity-level validator, so 0 retries.
+    REQUIRE(stats->entity_retry_rate() == Catch::Approx(0.0));
+}
+
+TEST_CASE("stats_observer entity_retry_rate zero when empty", "[ext][stats]")
+{
+    dasmig::ext::stats_observer stats;
+    REQUIRE(stats.entity_retry_rate() == Catch::Approx(0.0));
+}
+
+TEST_CASE("stats_observer component_retry_rate zero when empty",
+          "[ext][stats]")
+{
+    dasmig::ext::stats_observer stats;
+    REQUIRE(stats.component_retry_rate() == Catch::Approx(0.0));
+}
+
+// ---------------------------------------------------------------------------
+// stats_observer: value distribution for every supported type
+// ---------------------------------------------------------------------------
+
+TEST_CASE("stats_observer distribution for double", "[ext][stats][distribution]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<double_component>(3.14));
+
+    gen.generate();
+
+    REQUIRE(stats->value_distribution.contains(L"a"));
+    REQUIRE(stats->value_distribution.at(L"a").size() == 1);
+}
+
+TEST_CASE("stats_observer distribution for float", "[ext][stats][distribution]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<float_component>(2.5f));
+
+    gen.generate();
+
+    REQUIRE(stats->value_distribution.contains(L"a"));
+    REQUIRE(stats->value_distribution.at(L"a").size() == 1);
+}
+
+TEST_CASE("stats_observer distribution for long",
+          "[ext][stats][distribution]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<dasmig::constant_component<long>>(L"l", 42L));
+
+    gen.generate();
+
+    REQUIRE(stats->value_distribution.at(L"l").at(L"42") == 1);
+}
+
+TEST_CASE("stats_observer distribution for bool true and false",
+          "[ext][stats][distribution]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<bool_component>(true));
+
+    gen.generate();
+
+    REQUIRE(stats->value_distribution.at(L"b").at(L"true") == 1);
+
+    stats->reset();
+    gen.remove(L"b");
+    gen.add(std::make_unique<bool_component>(false));
+
+    gen.generate();
+
+    REQUIRE(stats->value_distribution.at(L"b").at(L"false") == 1);
+}
+
+TEST_CASE("stats_observer distribution for unknown type records other",
+          "[ext][stats][distribution]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<unknown_type_component>());
+
+    gen.generate();
+
+    REQUIRE(stats->value_distribution.at(L"a").at(L"<other>") == 1);
+}
+
+// ---------------------------------------------------------------------------
+// stats_observer: report
+// ---------------------------------------------------------------------------
+
+TEST_CASE("stats_observer report contains all sections", "[ext][stats][report]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"name", L"Alice"));
+    gen.add(std::make_unique<int_component>(L"age", 30));
+
+    gen.generate_batch(3);
+
+    auto r = stats->report();
+    REQUIRE(r.find(L"=== Entity Summary ===") != std::wstring::npos);
+    REQUIRE(r.find(L"=== Entity Timing ===") != std::wstring::npos);
+    REQUIRE(r.find(L"=== Components per Entity ===") != std::wstring::npos);
+    REQUIRE(r.find(L"=== Component Summary ===") != std::wstring::npos);
+    REQUIRE(r.find(L"=== Per-Component Breakdown ===") != std::wstring::npos);
+    REQUIRE(r.find(L"=== Value Distribution ===") != std::wstring::npos);
+    REQUIRE(r.find(L"Generated : 3") != std::wstring::npos);
+    REQUIRE(r.find(L"[name]") != std::wstring::npos);
+    REQUIRE(r.find(L"[age]") != std::wstring::npos);
+    REQUIRE(r.find(L"Alice") != std::wstring::npos);
+    REQUIRE(r.find(L"30") != std::wstring::npos);
+}
+
+TEST_CASE("stats_observer report with no entities", "[ext][stats][report]")
+{
+    dasmig::ext::stats_observer stats;
+    auto r = stats.report();
+    REQUIRE(r.find(L"=== Entity Summary ===") != std::wstring::npos);
+    REQUIRE(r.find(L"(no entities generated)") != std::wstring::npos);
+}
+
+TEST_CASE("stats_observer report includes skip and failure data",
+          "[ext][stats][report]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"val"), 0.0);
+    gen.add(std::make_unique<always_invalid_component>(L"bad"));
+    gen.max_retries(2);
+
+    // First generate: "a" skipped, "bad" fails.
+    REQUIRE_THROWS(gen.generate());
+
+    auto r = stats->report();
+    REQUIRE(r.find(L"Skipped") != std::wstring::npos);
+    REQUIRE(r.find(L"Failures") != std::wstring::npos);
+    REQUIRE(r.find(L"[bad]") != std::wstring::npos);
+}
+
+TEST_CASE("stats_observer report with retries shows retry rate",
+          "[ext][stats][report]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<even_only_component>());
+    gen.max_retries(100);
+
+    gen.generate_batch(5);
+
+    auto r = stats->report();
+    REQUIRE(r.find(L"Retry rate") != std::wstring::npos);
 }
