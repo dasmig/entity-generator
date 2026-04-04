@@ -1,4 +1,5 @@
 #include "../dasmig/entitygen.hpp"
+#include "../dasmig/ext/stats_observer.hpp"
 #include <iostream>
 
 // Example component: generates a random character class.
@@ -263,10 +264,10 @@ int main()
     };
 
     std::wcout << L"\n--- Observer hooks ---\n";
-    dasmig::eg::instance().set_observer(
+    dasmig::eg::instance().add_observer(
         std::make_shared<log_observer>());
     dasmig::eg::instance().generate({L"name", L"class"});
-    dasmig::eg::instance().clear_observer();
+    dasmig::eg::instance().clear_observers();
 
     // Conditional component: only generates when "class" is "Warrior".
     class warrior_title : public dasmig::component
@@ -375,6 +376,16 @@ int main()
     {
         std::wcout << item_gen.generate() << L'\n';
     }
+
+    // Generation statistics observer.
+    std::wcout << L"\n--- Generation statistics ---\n";
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg::instance().add_observer(stats);
+    dasmig::eg::instance().generate_batch(10);
+    std::wcout << L"Entities:   " << stats->entities_generated << L'\n';
+    std::wcout << L"Components: " << stats->components_generated << L'\n';
+    std::wcout << L"Skipped:    " << stats->components_skipped << L'\n';
+    dasmig::eg::instance().remove_observer(stats);
 
     return 0;
 }

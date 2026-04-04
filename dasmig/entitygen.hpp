@@ -535,7 +535,7 @@ class eg
     eg& add(std::unique_ptr<component> comp)
     {
         const auto key = comp->key();
-        if (_observer) _observer->on_before_add(key);
+        notify(&generation_observer::on_before_add, key);
 
         auto it = std::ranges::find(_components, key, &component_entry::first);
 
@@ -548,7 +548,7 @@ class eg
             _components.emplace_back(key, std::move(comp));
         }
 
-        if (_observer) _observer->on_after_add(key);
+        notify(&generation_observer::on_after_add, key);
         return *this;
     }
 
@@ -578,14 +578,14 @@ class eg
     // Remove a registered component by key.
     eg& remove(const std::wstring& component_key)
     {
-        if (_observer) _observer->on_before_remove(component_key);
+        notify(&generation_observer::on_before_remove, component_key);
 
         std::erase_if(_components, [&component_key](const auto& pair) {
             return pair.first == component_key;
         });
         _weight_overrides.erase(component_key);
 
-        if (_observer) _observer->on_after_remove(component_key);
+        notify(&generation_observer::on_after_remove, component_key);
         return *this;
     }
 
@@ -643,19 +643,26 @@ class eg
         return *this;
     }
 
-    // --- Observer ---------------------------------------------------------
+    // --- Observers --------------------------------------------------------
 
-    // Set an observer to receive generation lifecycle callbacks.
-    eg& set_observer(std::shared_ptr<generation_observer> obs)
+    // Add an observer to receive generation lifecycle callbacks.
+    eg& add_observer(std::shared_ptr<generation_observer> obs)
     {
-        _observer = std::move(obs);
+        _observers.push_back(std::move(obs));
         return *this;
     }
 
-    // Remove the observer.
-    eg& clear_observer()
+    // Remove a specific observer by identity.
+    eg& remove_observer(const std::shared_ptr<generation_observer>& obs)
     {
-        _observer.reset();
+        std::erase(_observers, obs);
+        return *this;
+    }
+
+    // Remove all observers.
+    eg& clear_observers()
+    {
+        _observers.clear();
         return *this;
     }
 
@@ -667,7 +674,7 @@ class eg
     {
         auto refs = all_component_refs();
         return generate_with_hooks([&] {
-            return generate_impl(refs, _engine, _max_retries, _observer.get());
+            return generate_impl(refs, _engine, _max_retries, _observers);
         });
     }
 
@@ -678,7 +685,7 @@ class eg
         auto refs = all_component_refs();
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
         return generate_with_hooks([&] {
-            return generate_impl(refs, engine, _max_retries, _observer.get());
+            return generate_impl(refs, engine, _max_retries, _observers);
         });
     }
 
@@ -691,7 +698,7 @@ class eg
     {
         auto filtered = filter_components(component_keys);
         return generate_with_hooks([&] {
-            return generate_impl(filtered, _engine, _max_retries, _observer.get());
+            return generate_impl(filtered, _engine, _max_retries, _observers);
         });
     }
 
@@ -706,7 +713,7 @@ class eg
         auto filtered = filter_components(component_keys);
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
         return generate_with_hooks([&] {
-            return generate_impl(filtered, engine, _max_retries, _observer.get());
+            return generate_impl(filtered, engine, _max_retries, _observers);
         });
     }
 
@@ -739,7 +746,7 @@ class eg
         std::generate_n(std::back_inserter(entities), count,
             [&] {
                 return generate_with_hooks([&] {
-                    return generate_impl(refs, _engine, _max_retries, _observer.get());
+                    return generate_impl(refs, _engine, _max_retries, _observers);
                 });
             });
 
@@ -760,7 +767,7 @@ class eg
         std::generate_n(std::back_inserter(entities), count,
             [&] {
                 return generate_with_hooks([&] {
-                    return generate_impl(refs, engine, _max_retries, _observer.get());
+                    return generate_impl(refs, engine, _max_retries, _observers);
                 });
             });
 
@@ -792,7 +799,7 @@ class eg
                             static_cast<std::mt19937::result_type>(task_seed)};
                         return generate_with_hooks([&] {
                             return generate_impl(
-                                refs, engine, _max_retries, _observer.get());
+                                refs, engine, _max_retries, _observers);
                         });
                     });
             });
@@ -829,7 +836,7 @@ class eg
                             static_cast<std::mt19937::result_type>(task_seed)};
                         return generate_with_hooks([&] {
                             return generate_impl(
-                                refs, engine, _max_retries, _observer.get());
+                                refs, engine, _max_retries, _observers);
                         });
                     });
             });
@@ -876,7 +883,7 @@ class eg
 
         auto filtered = filter_components(it->second);
         return generate_with_hooks([&] {
-            return generate_impl(filtered, _engine, _max_retries, _observer.get());
+            return generate_impl(filtered, _engine, _max_retries, _observers);
         });
     }
 
@@ -893,7 +900,7 @@ class eg
         auto filtered = filter_components(it->second);
         std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
         return generate_with_hooks([&] {
-            return generate_impl(filtered, engine, _max_retries, _observer.get());
+            return generate_impl(filtered, engine, _max_retries, _observers);
         });
     }
 
@@ -910,10 +917,32 @@ class eg
         double effective_weight;
     };
 
+    // Type alias for the observer list.
+    using observer_list =
+        std::vector<std::shared_ptr<generation_observer>>;
+
+    // Notify all observers in a list by calling a member function.
+    template <typename Hook, typename... Args>
+    static void notify_all(const observer_list& observers,
+                           Hook hook, Args&&... args)
+    {
+        for (const auto& obs : observers)
+        {
+            (obs.get()->*hook)(std::forward<Args>(args)...);
+        }
+    }
+
+    // Convenience: notify using the instance's observer list.
+    template <typename Hook, typename... Args>
+    void notify(Hook hook, Args&&... args) const
+    {
+        notify_all(_observers, hook, std::forward<Args>(args)...);
+    }
+
     // Core generation logic shared by all overloads.
     [[nodiscard]] static entity generate_impl(
         std::span<const component_ref> components, std::mt19937& engine,
-        std::size_t max_retries, generation_observer* obs)
+        std::size_t max_retries, const observer_list& observers)
     {
         entity generated_entity;
         generation_context ctx;
@@ -936,7 +965,8 @@ class eg
                 std::uniform_real_distribution<double> dist(0.0, 1.0);
                 if (dist(local_engine) >= ref.effective_weight)
                 {
-                    if (obs) obs->on_skip(ref.key);
+                    notify_all(observers,
+                        &generation_observer::on_skip, ref.key);
                     continue;
                 }
             }
@@ -944,11 +974,13 @@ class eg
             // Conditional check: skip if the component opts out based on context.
             if (!ref.comp.get().should_generate(ctx))
             {
-                if (obs) obs->on_skip(ref.key);
+                notify_all(observers,
+                    &generation_observer::on_skip, ref.key);
                 continue;
             }
 
-            if (obs) obs->on_before_component(ref.key);
+            notify_all(observers,
+                &generation_observer::on_before_component, ref.key);
 
             ctx._random.seed(static_cast<std::mt19937::result_type>(component_seed));
             auto value = ref.comp.get().generate(ctx);
@@ -958,24 +990,29 @@ class eg
                  retry < max_retries && !ref.comp.get().validate(value);
                  ++retry)
             {
-                if (obs) obs->on_before_retry(ref.key, retry + 1);
+                notify_all(observers,
+                    &generation_observer::on_before_retry, ref.key, retry + 1);
                 component_seed = static_cast<std::uint64_t>(local_engine());
                 ctx._random.seed(
                     static_cast<std::mt19937::result_type>(component_seed));
                 value = ref.comp.get().generate(ctx);
-                if (obs) obs->on_after_retry(ref.key, retry + 1, value);
+                notify_all(observers,
+                    &generation_observer::on_after_retry, ref.key,
+                    retry + 1, value);
             }
 
             if (!ref.comp.get().validate(value))
             {
-                if (obs) obs->on_component_fail(ref.key);
+                notify_all(observers,
+                    &generation_observer::on_component_fail, ref.key);
                 throw std::runtime_error(
                     "component validation failed after max retries");
             }
 
             auto display = ref.comp.get().to_string(value);
 
-            if (obs) obs->on_after_component(ref.key, value);
+            notify_all(observers,
+                &generation_observer::on_after_component, ref.key, value);
 
             ctx._values[ref.key] = value;
             generated_entity._entries.push_back(
@@ -993,17 +1030,19 @@ class eg
     template <typename GenFn>
     [[nodiscard]] entity with_entity_validation(GenFn&& fn) const
     {
-        auto* obs = _observer.get();
-
         for (std::size_t attempt = 0; attempt <= _max_retries; ++attempt)
         {
-            if (attempt > 0 && obs) obs->on_before_entity_retry(attempt);
+            if (attempt > 0)
+                notify_all(_observers,
+                    &generation_observer::on_before_entity_retry, attempt);
             auto e = fn();
-            if (attempt > 0 && obs) obs->on_after_entity_retry(attempt);
+            if (attempt > 0)
+                notify_all(_observers,
+                    &generation_observer::on_after_entity_retry, attempt);
             if (!_validator || _validator(e)) return e;
         }
 
-        if (obs) obs->on_entity_fail();
+        notify_all(_observers, &generation_observer::on_entity_fail);
         throw std::runtime_error(
             "entity validation failed after max retries");
     }
@@ -1012,10 +1051,10 @@ class eg
     template <typename GenFn>
     [[nodiscard]] entity generate_with_hooks(GenFn&& fn) const
     {
-        auto* obs = _observer.get();
-        if (obs) obs->on_before_generate();
+        notify_all(_observers, &generation_observer::on_before_generate);
         auto e = with_entity_validation(std::forward<GenFn>(fn));
-        if (obs) obs->on_after_generate(e);
+        notify_all(_observers,
+            &generation_observer::on_after_generate, e);
         return e;
     }
 
@@ -1075,8 +1114,8 @@ class eg
     // Entity-level validation function (optional).
     std::function<bool(const entity&)> _validator;
 
-    // Generation lifecycle observer (optional).
-    std::shared_ptr<generation_observer> _observer;
+    // Generation lifecycle observers (optional).
+    observer_list _observers;
 
     // Maximum retries for component and entity validation.
     std::size_t _max_retries{10};

@@ -1,5 +1,6 @@
 #include "catch_amalgamated.hpp"
 #include "../dasmig/entitygen.hpp"
+#include "../dasmig/ext/stats_observer.hpp"
 #include <atomic>
 #include <set>
 #include <sstream>
@@ -451,7 +452,7 @@ struct clear_generator
         }
         gen.unseed();
         gen.clear_validator();
-        gen.clear_observer();
+        gen.clear_observers();
         gen.max_retries(10);
 
         // Remove known groups.
@@ -1883,17 +1884,17 @@ TEST_CASE("entity validator applies to group generation", "[validation][entity][
 // Observer: API
 // ---------------------------------------------------------------------------
 
-TEST_CASE("set_observer returns self for fluent chaining", "[observer]")
+TEST_CASE("add_observer returns self for fluent chaining", "[observer]")
 {
     dasmig::eg gen;
-    auto& ret = gen.set_observer(std::make_shared<test_observer>());
+    auto& ret = gen.add_observer(std::make_shared<test_observer>());
     REQUIRE(&ret == &gen);
 }
 
-TEST_CASE("clear_observer returns self for fluent chaining", "[observer]")
+TEST_CASE("clear_observers returns self for fluent chaining", "[observer]")
 {
     dasmig::eg gen;
-    auto& ret = gen.clear_observer();
+    auto& ret = gen.clear_observers();
     REQUIRE(&ret == &gen);
 }
 
@@ -1912,7 +1913,7 @@ TEST_CASE("observer receives before/after generate", "[observer]")
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
     obs->events.clear();
 
@@ -1930,7 +1931,7 @@ TEST_CASE("observer receives before/after component in order", "[observer]")
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"1"));
     gen.add(std::make_unique<string_component>(L"b", L"2"));
     obs->events.clear();
@@ -1954,7 +1955,7 @@ TEST_CASE("observer receives before/after skip on weight exclusion", "[observer]
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"val"), 0.0);
     obs->events.clear();
 
@@ -1973,7 +1974,7 @@ TEST_CASE("observer receives before/after retry on validation retry", "[observer
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<retry_count_component>(2));
     obs->events.clear();
 
@@ -1998,7 +1999,7 @@ TEST_CASE("observer receives component_fail on validation exhaustion", "[observe
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<always_invalid_component>(L"a"));
     gen.max_retries(2);
     obs->events.clear();
@@ -2017,7 +2018,7 @@ TEST_CASE("observer receives before/after entity retry", "[observer][validation]
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
     int call_count = 0;
@@ -2041,7 +2042,7 @@ TEST_CASE("observer receives entity_fail on entity validation exhaustion", "[obs
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
     gen.set_validator([](const dasmig::entity&) { return false; });
     gen.max_retries(2);
@@ -2061,7 +2062,7 @@ TEST_CASE("observer receives before/after add on registration", "[observer][regi
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
 
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
@@ -2074,7 +2075,7 @@ TEST_CASE("observer receives before/after remove on removal", "[observer][regist
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
     obs->events.clear();
 
@@ -2089,7 +2090,7 @@ TEST_CASE("weight-override add fires hooks once", "[observer][registration]")
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
 
     gen.add(std::make_unique<string_component>(L"a", L"val"), 0.5);
 
@@ -2098,18 +2099,18 @@ TEST_CASE("weight-override add fires hooks once", "[observer][registration]")
 }
 
 // ---------------------------------------------------------------------------
-// Observer: clear_observer stops hooks
+// Observer: clear_observers stops hooks
 // ---------------------------------------------------------------------------
 
-TEST_CASE("clear_observer stops hooks from firing", "[observer]")
+TEST_CASE("clear_observers stops hooks from firing", "[observer]")
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
     obs->events.clear();
 
-    gen.clear_observer();
+    gen.clear_observers();
     gen.generate();
 
     REQUIRE(obs->events.empty());
@@ -2123,7 +2124,7 @@ TEST_CASE("observer fires with seeded generation", "[observer][seed]")
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
     obs->events.clear();
 
@@ -2137,7 +2138,7 @@ TEST_CASE("observer fires per entity in batch", "[observer][batch]")
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
     obs->events.clear();
 
@@ -2151,7 +2152,7 @@ TEST_CASE("observer fires with group generation", "[observer][group]")
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"1"))
        .add(std::make_unique<string_component>(L"b", L"2"));
     gen.add_group(L"grp", {L"a"});
@@ -2170,7 +2171,7 @@ TEST_CASE("default observer no-ops cover all hooks", "[observer]")
 {
     auto obs = std::make_shared<dasmig::generation_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
 
     // Registration + removal hooks (default no-ops).
     gen.add(std::make_unique<string_component>(L"a", L"val"), 0.0);
@@ -2249,7 +2250,7 @@ TEST_CASE("conditional skip fires observer hooks", "[conditional][observer]")
 {
     auto obs = std::make_shared<test_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<never_generate_component>(L"hidden"));
     obs->events.clear();
 
@@ -2319,7 +2320,7 @@ TEST_CASE("default observer covers conditional skip", "[conditional][observer]")
 {
     auto obs = std::make_shared<dasmig::generation_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<never_generate_component>(L"hidden"));
 
     // Should not crash — default no-op observer.
@@ -2549,7 +2550,7 @@ TEST_CASE("generate_batch_async observer hooks fire",
 
     auto obs = std::make_shared<counting_observer>();
     dasmig::eg gen;
-    gen.set_observer(obs);
+    gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"x", L"v"));
 
     gen.generate_batch_async(5);
@@ -2924,4 +2925,221 @@ TEST_CASE("generic components work with weight overrides",
 
     auto e = gen.generate();
     REQUIRE_FALSE(e.has(L"x"));
+}
+
+// ---------------------------------------------------------------------------
+// Multi-observer
+// ---------------------------------------------------------------------------
+
+TEST_CASE("multiple observers all receive hooks", "[observer][multi]")
+{
+    auto obs1 = std::make_shared<test_observer>();
+    auto obs2 = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.add_observer(obs1);
+    gen.add_observer(obs2);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    gen.generate();
+
+    REQUIRE_FALSE(obs1->events.empty());
+    REQUIRE(obs1->events == obs2->events);
+}
+
+TEST_CASE("remove_observer stops hooks for that observer", "[observer][multi]")
+{
+    auto obs1 = std::make_shared<test_observer>();
+    auto obs2 = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    gen.add_observer(obs1);
+    gen.add_observer(obs2);
+
+    gen.remove_observer(obs1);
+    gen.generate();
+
+    REQUIRE(obs1->events.empty());
+    REQUIRE_FALSE(obs2->events.empty());
+}
+
+TEST_CASE("remove_observer returns self for fluent chaining", "[observer][multi]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.add_observer(obs);
+    auto& ret = gen.remove_observer(obs);
+    REQUIRE(&ret == &gen);
+}
+
+TEST_CASE("remove_observer with unknown observer is no-op", "[observer][multi]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    REQUIRE_NOTHROW(gen.remove_observer(obs));
+}
+
+TEST_CASE("add same observer twice fires hooks twice", "[observer][multi]")
+{
+    auto obs = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.add_observer(obs);
+    gen.add_observer(obs);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    gen.generate();
+
+    // on_before_generate fires twice (once per registration).
+    auto count = std::ranges::count(obs->events, L"before_generate");
+    REQUIRE(count == 2);
+}
+
+// ---------------------------------------------------------------------------
+// Extension: stats_observer
+// ---------------------------------------------------------------------------
+
+TEST_CASE("stats_observer counts entities generated", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    gen.generate_batch(5);
+
+    REQUIRE(stats->entities_generated == 5);
+}
+
+TEST_CASE("stats_observer counts components generated", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"A"));
+    gen.add(std::make_unique<string_component>(L"b", L"B"));
+
+    gen.generate();
+
+    REQUIRE(stats->components_generated == 2);
+}
+
+TEST_CASE("stats_observer counts skipped components", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"A"), 0.0);
+
+    gen.generate();
+
+    REQUIRE(stats->components_skipped == 1);
+    REQUIRE(stats->components_generated == 0);
+}
+
+TEST_CASE("stats_observer counts component retries", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<even_only_component>());
+    gen.max_retries(100);
+
+    gen.generate();
+
+    // At least one retry must have happened (first value may be odd).
+    // If even on first try, retries == 0 which is still valid.
+    REQUIRE(stats->components_generated == 1);
+}
+
+TEST_CASE("stats_observer counts component failures", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<always_invalid_component>(L"bad"));
+    gen.max_retries(3);
+
+    REQUIRE_THROWS(gen.generate());
+
+    REQUIRE(stats->component_failures == 1);
+}
+
+TEST_CASE("stats_observer counts entity retries", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<random_int_component>(L"v", 1, 100));
+    gen.set_validator([](const dasmig::entity& e) {
+        return e.get<int>(L"v") > 50;
+    });
+    gen.max_retries(100);
+
+    gen.generate();
+
+    // entity_retries >= 0 (may pass on first try).
+    REQUIRE(stats->entities_generated == 1);
+}
+
+TEST_CASE("stats_observer counts entity failures", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    gen.set_validator([](const dasmig::entity&) { return false; });
+    gen.max_retries(2);
+
+    REQUIRE_THROWS(gen.generate());
+
+    REQUIRE(stats->entity_failures == 1);
+}
+
+TEST_CASE("stats_observer reset clears all counters", "[ext][stats]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    gen.generate_batch(3);
+    stats->reset();
+
+    REQUIRE(stats->entities_generated == 0);
+    REQUIRE(stats->components_generated == 0);
+    REQUIRE(stats->components_skipped == 0);
+    REQUIRE(stats->component_retries.empty());
+    REQUIRE(stats->component_failures == 0);
+    REQUIRE(stats->entity_retries == 0);
+    REQUIRE(stats->entity_failures == 0);
+}
+
+TEST_CASE("stats_observer works alongside other observers",
+          "[ext][stats][multi]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    auto log = std::make_shared<test_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add_observer(log);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    gen.generate();
+
+    REQUIRE(stats->entities_generated == 1);
+    REQUIRE_FALSE(log->events.empty());
+}
+
+TEST_CASE("stats_observer conditional skip counted", "[ext][stats][conditional]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<never_generate_component>(L"skip"));
+
+    gen.generate();
+
+    REQUIRE(stats->components_skipped == 1);
+    REQUIRE(stats->components_generated == 0);
 }

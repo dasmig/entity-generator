@@ -16,7 +16,9 @@
 
 - **Advanced Generation** — Batch generation (synchronous and concurrent), named component groups, selective generation by key subset, component weights for probabilistic inclusion, and conditional components for logic-driven inclusion via `should_generate(ctx)`.
 
-- **Validation & Hooks** — Per-component `validate()` with automatic retries, entity-level validator callbacks, and a `generation_observer` interface with 15 lifecycle hooks for generation, skip, retry, fail, and registration events.
+- **Validation & Hooks** — Per-component `validate()` with automatic retries, entity-level validator callbacks, and a `generation_observer` interface with 15 lifecycle hooks. Multiple observers can be attached simultaneously via `add_observer` / `remove_observer`.
+
+- **Extensions** — `dasmig::ext::stats_observer` tracks generation counts, skips, retries, and failures out of the box.
 
 - **Serialization** — `entity.to_string()`, `operator<<`, and `entity.to_map()` for structured key–value export.
 
@@ -99,6 +101,6 @@ int char_age = entity.get<int>(L"age");
 auto seeded = eg::instance().generate(42);
 ```
 
-For the complete feature guide — component dependencies, custom types, seed signatures, batch generation, groups, weights, validation, event hooks, and more — see the **[Usage Guide](doc/usage.md)**.
+For the complete feature guide — component dependencies, custom types, seed signatures, batch generation, groups, weights, validation, event hooks, extensions, and more — see the **[Usage Guide](doc/usage.md)**.
 
 For planned features — concurrent generation, conditional components, structured serialization, EnTT integration, and more — see the **[Roadmap](doc/roadmap.md)**.

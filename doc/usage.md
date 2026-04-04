@@ -22,6 +22,7 @@ This guide covers every feature of the entity-generator library in detail. For a
 - [Event Hooks](#event-hooks)
 - [Conditional Components](#conditional-components)
 - [Generic Components](#generic-components)
+- [Extensions](#extensions)
 
 ## Defining Components
 
@@ -440,7 +441,7 @@ eg::instance().max_retries(20);
 
 ## Event Hooks
 
-Attach a `generation_observer` to any generator to receive lifecycle callbacks. Override only the hooks you need; all default to no-ops.
+Attach one or more `generation_observer` instances to any generator to receive lifecycle callbacks. Override only the hooks you need; all default to no-ops.
 
 ```cpp
 class log_observer : public dasmig::generation_observer
@@ -457,10 +458,16 @@ class log_observer : public dasmig::generation_observer
     }
 };
 
-eg::instance().set_observer(std::make_shared<log_observer>());
+auto obs = std::make_shared<log_observer>();
+eg::instance().add_observer(obs);
 eg::instance().generate(); // prints hook messages
-eg::instance().clear_observer();
+eg::instance().remove_observer(obs);
+
+// Or remove all observers at once.
+eg::instance().clear_observers();
 ```
+
+Multiple observers fire in registration order. The same observer can be added more than once.
 
 The full set of hooks (6 before/after pairs + 3 single-fire hooks, 15 methods):
 
@@ -578,3 +585,43 @@ gen.add(std::make_unique<dasmig::constant_component<int, decltype(fmt)>>(
     L"id", 5, fmt));
 // to_map()["id"] == "#5"
 ```
+
+## Extensions
+
+Optional headers in `dasmig/ext/` provide ready-made functionality built on the observer interface.
+
+### stats_observer
+
+`#include <dasmig/ext/stats_observer.hpp>`
+
+Tracks aggregate generation statistics. Attach it like any other observer; read the counters after generation.
+
+```cpp
+auto stats = std::make_shared<dasmig::ext::stats_observer>();
+gen.add_observer(stats);
+
+gen.generate_batch(100);
+
+std::wcout << L"Entities:   " << stats->entities_generated  << L'\n'
+           << L"Components: " << stats->components_generated << L'\n'
+           << L"Skipped:    " << stats->components_skipped   << L'\n'
+           << L"Failures:   " << stats->component_failures   << L'\n';
+
+// Per-key retry counts.
+for (const auto& [key, n] : stats->component_retries)
+    std::wcout << key << L" retries: " << n << L'\n';
+
+stats->reset(); // zeroes all counters
+```
+
+**Counters:**
+
+| Counter | Incremented by |
+|---|---|
+| `entities_generated` | `on_after_generate` — each successful entity |
+| `entity_retries` | `on_after_entity_retry` — each entity-level retry |
+| `entity_failures` | `on_entity_fail` — entity validation exhausted |
+| `components_generated` | `on_after_component` — each successful component |
+| `components_skipped` | `on_skip` — weight or conditional skip |
+| `component_failures` | `on_component_fail` — component retries exhausted |
+| `component_retries` | `on_after_retry` — map from key to retry count |
