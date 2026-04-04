@@ -2,9 +2,13 @@
 
 Planned features for the entity-generator library. Items are not in priority order.
 
-## EnTT Integration
+## ~~EnTT Integration~~
 
-An adapter layer that bridges entity-generator with the [EnTT](https://github.com/skypjack/entt) ECS library. Generated component values are automatically assigned as EnTT components to an entity in a registry, enabling direct use in ECS-based game loops without manual mapping.
+Adapter layer (`dasmig/ext/entt_adapter.hpp`) bridges entity-generator with [EnTT](https://github.com/skypjack/entt). Users register key→component mappings, then `spawn()` creates typed EnTT entities from generated output.
+
+## ~~Flecs Integration~~
+
+Adapter layer (`dasmig/ext/flecs_adapter.hpp`) bridges entity-generator with [Flecs](https://github.com/SanderMertens/flecs). Same mapping pattern as the EnTT adapter, using Flecs' `set<T>()` API.
 
 ## Python Wrapper
 

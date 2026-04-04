@@ -25,6 +25,8 @@ This guide covers every feature of the entity-generator library in detail. For a
 - [Entity Introspection](#entity-introspection)
 - [Generator Introspection](#generator-introspection)
 - [Extensions](#extensions)
+- [ECS Integration: EnTT](#ecs-integration-entt)
+- [ECS Integration: Flecs](#ecs-integration-flecs)
 
 ## Defining Components
 
@@ -750,3 +752,115 @@ stats->reset(); // zeroes all counters
 | `avg_components_per_entity()` | `double` average |
 | `component_retry_rate()` | total retries / components generated |
 | `entity_retry_rate()` | entity retries / entities generated |
+
+## ECS Integration: EnTT
+
+`dasmig/ext/entt_adapter.hpp` bridges entity-generator with [EnTT](https://github.com/skypjack/entt). It maps generator component keys to typed EnTT components via user-defined callables.
+
+**Requires:** EnTT header (`<entt/entt.hpp>`) available on the include path.
+
+```cpp
+#include <dasmig/entitygen.hpp>
+#include <dasmig/ext/entt_adapter.hpp>
+
+// ECS component types
+struct Name { std::wstring value; };
+struct Position { float x, y; };
+
+// Set up generator
+dasmig::eg gen;
+gen.add(std::make_unique<dasmig::constant_component<std::wstring>>(L"name", L"Alice"))
+   .add(std::make_unique<dasmig::range_component<float>>(L"x", 0.f, 100.f))
+   .add(std::make_unique<dasmig::range_component<float>>(L"y", 0.f, 100.f));
+
+// Set up adapter
+entt::registry registry;
+dasmig::ext::entt_adapter adapter(registry);
+
+adapter.map<Name>(L"name", [](const dasmig::entity& e) {
+    return Name{e.get<std::wstring>(L"name")};
+});
+
+// Multi-key → single component: triggered by key "x", reads both "x" and "y"
+adapter.map<Position>(L"x", [](const dasmig::entity& e) {
+    return Position{e.get<float>(L"x"), e.get<float>(L"y")};
+});
+
+// Spawn
+auto entt_entity = adapter.spawn(gen.generate());
+registry.get<Name>(entt_entity);     // Name{"Alice"}
+registry.get<Position>(entt_entity); // Position{...}
+
+// Batch spawn
+auto batch = gen.generate_batch(100);
+auto entities = adapter.spawn_batch(batch); // 100 EnTT entities
+```
+
+**Direct mapping** (no transform, when generator value type == ECS type):
+
+```cpp
+gen.add(std::make_unique<dasmig::range_component<int>>(L"hp", 50, 200));
+adapter.map<int>(L"hp"); // any_cast<int> directly emplaced
+```
+
+**Spawn into existing entity:**
+
+```cpp
+auto prefab = registry.create();
+registry.emplace<some_tag>(prefab);
+adapter.spawn_into(prefab, gen.generate()); // adds mapped components
+```
+
+**Skipped components** (weight = 0, conditional = false) are silently ignored — no EnTT component is emplaced for that key.
+
+## ECS Integration: Flecs
+
+`dasmig/ext/flecs_adapter.hpp` bridges entity-generator with [Flecs](https://github.com/SanderMertens/flecs). Same mapping pattern as the EnTT adapter.
+
+**Requires:** Flecs header (`<flecs.h>`) and compiled `flecs.c` linked.
+
+```cpp
+#include <dasmig/entitygen.hpp>
+#include <dasmig/ext/flecs_adapter.hpp>
+
+struct Name { std::wstring value; };
+struct Position { float x, y; };
+
+dasmig::eg gen;
+gen.add(std::make_unique<dasmig::constant_component<std::wstring>>(L"name", L"Alice"))
+   .add(std::make_unique<dasmig::range_component<float>>(L"x", 0.f, 100.f))
+   .add(std::make_unique<dasmig::range_component<float>>(L"y", 0.f, 100.f));
+
+flecs::world world;
+dasmig::ext::flecs_adapter adapter(world);
+
+adapter.map<Name>(L"name", [](const dasmig::entity& e) {
+    return Name{e.get<std::wstring>(L"name")};
+});
+
+adapter.map<Position>(L"x", [](const dasmig::entity& e) {
+    return Position{e.get<float>(L"x"), e.get<float>(L"y")};
+});
+
+auto flecs_entity = adapter.spawn(gen.generate());
+flecs_entity.get<Name>();     // const Name&
+flecs_entity.get<Position>(); // const Position&
+
+// Batch spawn
+auto entities = adapter.spawn_batch(gen.generate_batch(100));
+
+// Spawn into existing entity
+auto prefab = world.entity();
+adapter.spawn_into(prefab, gen.generate());
+```
+
+**API summary** (identical for both adapters):
+
+| Method | Description |
+|---|---|
+| `map<T>(key, fn)` | Register a key→component mapping with transform |
+| `map<T>(key)` | Direct mapping (value type must match T) |
+| `spawn(entity)` | Create ECS entity with mapped components |
+| `spawn_into(target, entity)` | Apply mapped components to existing entity |
+| `spawn_batch(vector)` | Spawn multiple entities at once |
+| `clear_mappings()` | Remove all registered mappings |

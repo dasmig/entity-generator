@@ -22,6 +22,8 @@
 
 - **Extensions** — `dasmig::ext::stats_observer` tracks generation counts, skips, retries, and failures out of the box.
 
+- **ECS Integration** — Optional adapter headers for [EnTT](https://github.com/skypjack/entt) and [Flecs](https://github.com/SanderMertens/flecs). Register key→component mappings, then `spawn()` converts generated entities into typed ECS entities.
+
 - **Serialization** — `entity.to_string()`, `operator<<`, and `entity.to_map()` for structured key–value export.
 
 - **Composable & Thread-Safe** — Components can wrap [name-generator](https://github.com/dasmig/name-generator) and [nickname-generator](https://github.com/dasmig/nickname-generator). Independent `eg` instances enable lock-free concurrent generation.
@@ -105,4 +107,4 @@ auto seeded = eg::instance().generate(42);
 
 For the complete feature guide — component dependencies, custom types, seed signatures, batch generation, groups, weights, validation, event hooks, extensions, and more — see the **[Usage Guide](doc/usage.md)**.
 
-For planned features — EnTT integration, Python/Node.js/.NET wrappers, and more — see the **[Roadmap](doc/roadmap.md)**.
+For planned features — Python/Node.js/.NET wrappers and more — see the **[Roadmap](doc/roadmap.md)**.
