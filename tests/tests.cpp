@@ -441,26 +441,11 @@ struct clear_generator
     clear_generator()
     {
         auto& gen = dasmig::eg::instance();
-        // Remove all known keys. Since we control the test components, we
-        // remove by key. This is a workaround for the lack of a clear() API.
-        for (const auto& k : std::vector<std::wstring>{
-                 L"a", L"b", L"c", L"name", L"age", L"greeting", L"pos",
-                 L"rand", L"level", L"doubled", L"scaled", L"chain",
-                 L"probe", L"later", L"even"})
-        {
-            gen.remove(k);
-        }
+        gen.clear();
         gen.unseed();
         gen.clear_validator();
         gen.clear_observers();
         gen.max_retries(10);
-
-        // Remove known groups.
-        for (const auto& g : std::vector<std::wstring>{
-                 L"combat", L"identity", L"nonexistent"})
-        {
-            gen.remove_group(g);
-        }
     }
     ~clear_generator() = default;
 };
@@ -3042,14 +3027,13 @@ TEST_CASE("stats_observer counts component retries", "[ext][stats]")
     auto stats = std::make_shared<dasmig::ext::stats_observer>();
     dasmig::eg gen;
     gen.add_observer(stats);
-    gen.add(std::make_unique<even_only_component>());
-    gen.max_retries(100);
+    gen.add(std::make_unique<retry_count_component>(3));
+    gen.max_retries(10);
 
     gen.generate();
 
-    // At least one retry must have happened (first value may be odd).
-    // If even on first try, retries == 0 which is still valid.
     REQUIRE(stats->components_generated == 1);
+    REQUIRE(stats->component_retries.at(L"retry_comp") == 3);
 }
 
 TEST_CASE("stats_observer counts component failures", "[ext][stats]")
@@ -3072,14 +3056,14 @@ TEST_CASE("stats_observer counts entity retries", "[ext][stats]")
     gen.add_observer(stats);
     gen.add(std::make_unique<random_int_component>(L"v", 1, 100));
     gen.set_validator([](const dasmig::entity& e) {
-        return e.get<int>(L"v") > 50;
+        return e.get<int>(L"v") > 95;
     });
-    gen.max_retries(100);
+    gen.max_retries(200);
 
     gen.generate();
 
-    // entity_retries >= 0 (may pass on first try).
     REQUIRE(stats->entities_generated == 1);
+    REQUIRE(stats->entity_retries > 0);
 }
 
 TEST_CASE("stats_observer counts entity failures", "[ext][stats]")
@@ -3601,4 +3585,425 @@ TEST_CASE("stats_observer report with retries shows retry rate",
 
     auto r = stats->report();
     REQUIRE(r.find(L"Retry rate") != std::wstring::npos);
+}
+
+// ---------------------------------------------------------------------------
+// New API: eg::clear, eg::count, eg::component_keys
+// ---------------------------------------------------------------------------
+
+TEST_CASE("clear removes all components, overrides and groups", "[eg][clear]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"A"))
+       .add(std::make_unique<string_component>(L"b", L"B"), 0.5);
+    gen.add_group(L"g", {L"a"});
+
+    gen.clear();
+
+    REQUIRE_FALSE(gen.has(L"a"));
+    REQUIRE_FALSE(gen.has(L"b"));
+    REQUIRE_FALSE(gen.has_group(L"g"));
+    REQUIRE(gen.size() == 0);
+}
+
+TEST_CASE("clear returns self for fluent chaining", "[eg][clear]")
+{
+    dasmig::eg gen;
+    auto& ret = gen.clear();
+    REQUIRE(&ret == &gen);
+}
+
+TEST_CASE("size returns number of registered components", "[eg][size]")
+{
+    dasmig::eg gen;
+    REQUIRE(gen.size() == 0);
+    gen.add(std::make_unique<string_component>(L"a", L"A"));
+    REQUIRE(gen.size() == 1);
+    gen.add(std::make_unique<string_component>(L"b", L"B"));
+    REQUIRE(gen.size() == 2);
+    gen.remove(L"a");
+    REQUIRE(gen.size() == 1);
+}
+
+TEST_CASE("component_keys returns keys in registration order", "[eg][keys]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"b", L"B"));
+    gen.add(std::make_unique<string_component>(L"a", L"A"));
+
+    auto keys = gen.component_keys();
+    REQUIRE(keys.size() == 2);
+    REQUIRE(keys[0] == L"b");
+    REQUIRE(keys[1] == L"a");
+}
+
+TEST_CASE("component_keys empty for fresh generator", "[eg][keys]")
+{
+    dasmig::eg gen;
+    REQUIRE(gen.component_keys().empty());
+}
+
+// ---------------------------------------------------------------------------
+// New API: entity::size, entity::empty
+// ---------------------------------------------------------------------------
+
+TEST_CASE("entity size and empty", "[entity][size]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"A"));
+    gen.add(std::make_unique<string_component>(L"b", L"B"));
+
+    auto e = gen.generate();
+    REQUIRE(e.size() == 2);
+    REQUIRE_FALSE(e.empty());
+}
+
+TEST_CASE("entity empty when no components", "[entity][size]")
+{
+    dasmig::eg gen;
+    auto e = gen.generate();
+    REQUIRE(e.size() == 0);
+    REQUIRE(e.empty());
+}
+
+// ---------------------------------------------------------------------------
+// Input validation: choice_component, weighted_choice_component
+// ---------------------------------------------------------------------------
+
+TEST_CASE("choice_component empty choices throws", "[generic][validation]")
+{
+    REQUIRE_THROWS_WITH(
+        (dasmig::choice_component<int>(L"x", std::vector<int>{})),
+        "choices must not be empty");
+}
+
+TEST_CASE("choice_component single element always returns it",
+          "[generic][choice]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::choice_component<int>>(
+        L"x", std::vector<int>{42}));
+
+    for (int i = 0; i < 10; ++i)
+    {
+        auto e = gen.generate();
+        REQUIRE(e.get<int>(L"x") == 42);
+    }
+}
+
+TEST_CASE("weighted_choice_component empty options throws",
+          "[generic][validation]")
+{
+    using wc = dasmig::weighted_choice_component<int>;
+    REQUIRE_THROWS_WITH(
+        (wc(L"x", std::vector<wc::option>{})),
+        "options must not be empty");
+}
+
+TEST_CASE("weighted_choice_component all-zero weights throws",
+          "[generic][validation]")
+{
+    using wc = dasmig::weighted_choice_component<int>;
+    REQUIRE_THROWS_WITH(
+        (wc(L"x", std::vector<wc::option>{{1, 0.0}, {2, 0.0}})),
+        "at least one option must have a positive weight");
+}
+
+// ---------------------------------------------------------------------------
+// default_to_string: long type
+// ---------------------------------------------------------------------------
+
+TEST_CASE("default_to_string handles long type", "[to_string]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::constant_component<long>>(L"l", 99L));
+
+    auto e = gen.generate();
+    auto m = e.to_map();
+    REQUIRE(m.at(L"l") == L"99");
+}
+
+// ---------------------------------------------------------------------------
+// Error message verification
+// ---------------------------------------------------------------------------
+
+TEST_CASE("component validation failure message", "[error][message]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<always_invalid_component>(L"a"));
+    gen.max_retries(2);
+
+    REQUIRE_THROWS_WITH(gen.generate(),
+        "component validation failed after max retries");
+}
+
+TEST_CASE("entity validation failure message", "[error][message]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    gen.set_validator([](const dasmig::entity&) { return false; });
+    gen.max_retries(1);
+
+    REQUIRE_THROWS_WITH(gen.generate(),
+        "entity validation failed after max retries");
+}
+
+TEST_CASE("generate_group unknown group message", "[error][message]")
+{
+    dasmig::eg gen;
+    REQUIRE_THROWS_AS(gen.generate_group(L"nope"), std::out_of_range);
+}
+
+TEST_CASE("entity get missing key throws out_of_range", "[error][message]")
+{
+    dasmig::eg gen;
+    auto e = gen.generate();
+    REQUIRE_THROWS_AS(e.get<int>(L"nope"), std::out_of_range);
+}
+
+TEST_CASE("entity get_any missing key throws out_of_range", "[error][message]")
+{
+    dasmig::eg gen;
+    auto e = gen.generate();
+    REQUIRE_THROWS_AS(e.get_any(L"nope"), std::out_of_range);
+}
+
+TEST_CASE("entity seed missing key throws out_of_range", "[error][message]")
+{
+    dasmig::eg gen;
+    auto e = gen.generate();
+    REQUIRE_THROWS_AS(e.seed(L"nope"), std::out_of_range);
+}
+
+TEST_CASE("weight on unregistered key throws out_of_range", "[error][message]")
+{
+    dasmig::eg gen;
+    REQUIRE_THROWS_AS(gen.weight(L"nope", 0.5), std::out_of_range);
+}
+
+// ---------------------------------------------------------------------------
+// Boundary conditions
+// ---------------------------------------------------------------------------
+
+TEST_CASE("generate_batch zero returns empty vector", "[batch][boundary]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    REQUIRE(gen.generate_batch(0).empty());
+}
+
+TEST_CASE("generate_batch_async zero returns empty vector",
+          "[batch][boundary]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    REQUIRE(gen.generate_batch_async(0).empty());
+}
+
+TEST_CASE("max_retries zero throws on first validation failure",
+          "[validation][boundary]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<always_invalid_component>(L"a"));
+    gen.max_retries(0);
+
+    REQUIRE_THROWS_WITH(gen.generate(),
+        "component validation failed after max retries");
+}
+
+TEST_CASE("empty string as component key works", "[registration][boundary]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"", L"val"));
+
+    auto e = gen.generate();
+    REQUIRE(e.has(L""));
+    REQUIRE(e.get<std::wstring>(L"") == L"val");
+}
+
+TEST_CASE("range_component lo equals hi returns that value",
+          "[generic][boundary]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<dasmig::range_component<int>>(L"x", 7, 7));
+
+    for (int i = 0; i < 10; ++i)
+    {
+        auto e = gen.generate();
+        REQUIRE(e.get<int>(L"x") == 7);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Weight override persistence on re-add
+// ---------------------------------------------------------------------------
+
+TEST_CASE("weight override persists when component is replaced",
+          "[weight][registration]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"old"), 0.0);
+    gen.add(std::make_unique<string_component>(L"a", L"new"));
+
+    // Weight override 0.0 was set for key "a" and should persist.
+    auto e = gen.generate();
+    REQUIRE_FALSE(e.has(L"a"));
+}
+
+// ---------------------------------------------------------------------------
+// Group edge cases
+// ---------------------------------------------------------------------------
+
+TEST_CASE("group with nonexistent component keys produces empty entity",
+          "[group][boundary]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"A"));
+    gen.add_group(L"g", {L"a", L"missing"});
+
+    auto e = gen.generate_group(L"g");
+    REQUIRE(e.has(L"a"));
+    REQUIRE_FALSE(e.has(L"missing"));
+}
+
+TEST_CASE("group with empty key list produces empty entity",
+          "[group][boundary]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"A"));
+    gen.add_group(L"empty", {});
+
+    auto e = gen.generate_group(L"empty");
+    REQUIRE(e.empty());
+}
+
+TEST_CASE("remove_group on non-existent group is no-op",
+          "[group][boundary]")
+{
+    dasmig::eg gen;
+    REQUIRE_NOTHROW(gen.remove_group(L"nope"));
+}
+
+// ---------------------------------------------------------------------------
+// Move-assignment of eg
+// ---------------------------------------------------------------------------
+
+TEST_CASE("eg move-assignment transfers components", "[eg][move]")
+{
+    dasmig::eg gen1;
+    gen1.add(std::make_unique<string_component>(L"a", L"A"));
+
+    dasmig::eg gen2;
+    gen2 = std::move(gen1);
+
+    REQUIRE(gen2.has(L"a"));
+    auto e = gen2.generate();
+    REQUIRE(e.get<std::wstring>(L"a") == L"A");
+}
+
+// ---------------------------------------------------------------------------
+// Callback component with throwing callable
+// ---------------------------------------------------------------------------
+
+TEST_CASE("callback_component propagates exception from callable",
+          "[generic][callback]")
+{
+    using cb_t = dasmig::callback_component<int,
+        std::function<int(const dasmig::generation_context&)>>;
+    dasmig::eg gen;
+    gen.add(std::make_unique<cb_t>(
+        L"x", [](const dasmig::generation_context&) -> int {
+            throw std::runtime_error("boom");
+        }));
+
+    REQUIRE_THROWS_WITH(gen.generate(), "boom");
+}
+
+// ---------------------------------------------------------------------------
+// Observer firing order
+// ---------------------------------------------------------------------------
+
+TEST_CASE("multiple observers fire in registration order",
+          "[observer][order]")
+{
+    // Use a shared log to record which observer fires.
+    auto log = std::make_shared<std::vector<int>>();
+
+    struct order_observer : dasmig::generation_observer
+    {
+        int id;
+        std::shared_ptr<std::vector<int>> log;
+        order_observer(int id, std::shared_ptr<std::vector<int>> log)
+            : id{id}, log{std::move(log)} {}
+        void on_before_generate() override { log->push_back(id); }
+    };
+
+    auto obs1 = std::make_shared<order_observer>(1, log);
+    auto obs2 = std::make_shared<order_observer>(2, log);
+
+    dasmig::eg gen;
+    gen.add_observer(obs1);
+    gen.add_observer(obs2);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+
+    gen.generate();
+
+    REQUIRE(log->size() == 2);
+    REQUIRE((*log)[0] == 1);
+    REQUIRE((*log)[1] == 2);
+}
+
+// ---------------------------------------------------------------------------
+// Concurrent batch with failing validator
+// ---------------------------------------------------------------------------
+
+TEST_CASE("generate_batch_async propagates validation failure",
+          "[batch][async][error]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    gen.set_validator([](const dasmig::entity&) { return false; });
+    gen.max_retries(1);
+
+    REQUIRE_THROWS(gen.generate_batch_async(3));
+}
+
+// ---------------------------------------------------------------------------
+// stats_observer stream operator
+// ---------------------------------------------------------------------------
+
+TEST_CASE("stats_observer stream operator outputs report",
+          "[ext][stats][stream]")
+{
+    auto stats = std::make_shared<dasmig::ext::stats_observer>();
+    dasmig::eg gen;
+    gen.add_observer(stats);
+    gen.add(std::make_unique<string_component>(L"a", L"val"));
+    gen.generate();
+
+    std::wostringstream wos;
+    wos << *stats;
+    REQUIRE(wos.str().find(L"=== Entity Summary ===") != std::wstring::npos);
+}
+
+// ---------------------------------------------------------------------------
+// entity::to_string edge case: empty entity
+// ---------------------------------------------------------------------------
+
+TEST_CASE("entity to_string on empty entity returns empty string",
+          "[entity][to_string]")
+{
+    dasmig::eg gen;
+    auto e = gen.generate();
+    REQUIRE(e.to_string().empty());
+}
+
+TEST_CASE("entity to_map on empty entity returns empty map",
+          "[entity][to_map]")
+{
+    dasmig::eg gen;
+    auto e = gen.generate();
+    REQUIRE(e.to_map().empty());
 }

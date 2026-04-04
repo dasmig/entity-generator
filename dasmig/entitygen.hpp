@@ -10,6 +10,7 @@
 #include <iterator>
 #include <map>
 #include <memory>
+#include <optional>
 #include <ostream>
 #include <ranges>
 #include <span>
@@ -125,6 +126,10 @@ class component
         {
             return std::to_wstring(std::any_cast<float>(value));
         }
+        if (value.type() == typeid(long))
+        {
+            return std::to_wstring(std::any_cast<long>(value));
+        }
         if (value.type() == typeid(bool))
         {
             return std::any_cast<bool>(value) ? L"true" : L"false";
@@ -181,7 +186,11 @@ class choice_component : public component
     explicit choice_component(std::wstring key, std::vector<T> choices,
                               Formatter fmt = {})
         : _key{std::move(key)}, _choices{std::move(choices)},
-          _fmt{std::move(fmt)} {}
+          _fmt{std::move(fmt)}
+    {
+        if (_choices.empty())
+            throw std::invalid_argument("choices must not be empty");
+    }
 
     [[nodiscard]] std::wstring key() const override { return _key; }
 
@@ -296,7 +305,15 @@ class weighted_choice_component : public component
                                        std::vector<option> options,
                                        Formatter fmt = {})
         : _key{std::move(key)}, _options{std::move(options)},
-          _fmt{std::move(fmt)} {}
+          _fmt{std::move(fmt)}
+    {
+        if (_options.empty())
+            throw std::invalid_argument("options must not be empty");
+        if (!std::ranges::any_of(_options,
+                [](const auto& o) { return o.weight > 0.0; }))
+            throw std::invalid_argument(
+                "at least one option must have a positive weight");
+    }
 
     [[nodiscard]] std::wstring key() const override { return _key; }
 
@@ -395,23 +412,25 @@ class entity
         return result;
     }
 
+    // Number of component values in this entity.
+    [[nodiscard]] std::size_t size() const { return _entries.size(); }
+
+    // Check if the entity has no component values.
+    [[nodiscard]] bool empty() const { return _entries.empty(); }
+
     // Convert all component values to a single formatted string.
     // Each entry is rendered as "key: display" separated by "  ".
     [[nodiscard]] std::wstring to_string() const
     {
-        std::wstring result;
+        auto parts = _entries
+            | std::views::transform([](const auto& e) {
+                return e.key + L": " + e.display;
+            });
 
-        for (const auto& e : _entries)
-        {
-            if (!result.empty())
-            {
-                result += L"  ";
-            }
-
-            result += e.key + L": " + e.display;
-        }
-
-        return result;
+        return std::ranges::fold_left_first(parts,
+            [](std::wstring acc, const std::wstring& part) {
+                return std::move(acc) + L"  " + part;
+            }).value_or(std::wstring{});
     }
 
     // Operator ostream streaming all component values in generation order.
@@ -537,15 +556,15 @@ class eg
         const auto key = comp->key();
         notify(&generation_observer::on_before_add, key);
 
-        auto it = std::ranges::find(_components, key, &component_entry::first);
+        auto it = std::ranges::find(_components, key, &component_entry::key);
 
         if (it != _components.end())
         {
-            it->second = std::move(comp);
+            it->comp = std::move(comp);
         }
         else
         {
-            _components.emplace_back(key, std::move(comp));
+            _components.push_back({key, std::move(comp)});
         }
 
         notify(&generation_observer::on_after_add, key);
@@ -580,8 +599,8 @@ class eg
     {
         notify(&generation_observer::on_before_remove, component_key);
 
-        std::erase_if(_components, [&component_key](const auto& pair) {
-            return pair.first == component_key;
+        std::erase_if(_components, [&component_key](const auto& entry) {
+            return entry.key == component_key;
         });
         _weight_overrides.erase(component_key);
 
@@ -592,9 +611,31 @@ class eg
     // Check if a component is registered by key.
     [[nodiscard]] bool has(const std::wstring& component_key) const
     {
-        return std::ranges::any_of(_components, [&component_key](const auto& pair) {
-            return pair.first == component_key;
+        return std::ranges::any_of(_components, [&component_key](const auto& entry) {
+            return entry.key == component_key;
         });
+    }
+
+    // Remove all registered components, weight overrides, and groups.
+    eg& clear()
+    {
+        _components.clear();
+        _weight_overrides.clear();
+        _groups.clear();
+        return *this;
+    }
+
+    // Return the number of registered components.
+    [[nodiscard]] std::size_t size() const { return _components.size(); }
+
+    // Return all registered component keys in registration order.
+    [[nodiscard]] std::vector<std::wstring> component_keys() const
+    {
+        std::vector<std::wstring> keys;
+        keys.reserve(_components.size());
+        std::ranges::transform(_components, std::back_inserter(keys),
+            &component_entry::key);
+        return keys;
     }
 
     // --- Seeding ---------------------------------------------------------
@@ -906,8 +947,11 @@ class eg
 
   private:
     // Component entry: key + owned component pointer.
-    using component_entry =
-        std::pair<std::wstring, std::unique_ptr<component>>;
+    struct component_entry
+    {
+        std::wstring key;
+        std::unique_ptr<component> comp;
+    };
 
     // Reference to a component entry for filtered generation.
     struct component_ref
@@ -928,7 +972,7 @@ class eg
     {
         for (const auto& obs : observers)
         {
-            (obs.get()->*hook)(std::forward<Args>(args)...);
+            ((*obs).*hook)(std::forward<Args>(args)...);
         }
     }
 
@@ -1067,8 +1111,8 @@ class eg
         refs.reserve(_components.size());
         std::ranges::transform(_components, std::back_inserter(refs),
             [this](const auto& entry) -> component_ref {
-                return {entry.first, std::cref(*entry.second),
-                        effective_weight(entry.first, *entry.second)};
+                return {entry.key, std::cref(*entry.comp),
+                        effective_weight(entry.key, *entry.comp)};
             });
         return refs;
     }
@@ -1082,11 +1126,11 @@ class eg
 
         auto matching = _components
             | std::views::filter([&](const auto& entry) {
-                return std::ranges::contains(component_keys, entry.first);
+                return std::ranges::contains(component_keys, entry.key);
             })
             | std::views::transform([this](const auto& entry) -> component_ref {
-                return {entry.first, std::cref(*entry.second),
-                        effective_weight(entry.first, *entry.second)};
+                return {entry.key, std::cref(*entry.comp),
+                        effective_weight(entry.key, *entry.comp)};
             });
         std::ranges::copy(matching, std::back_inserter(filtered));
 

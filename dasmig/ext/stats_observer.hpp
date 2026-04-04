@@ -429,6 +429,13 @@ class stats_observer : public generation_observer
     }
 };
 
+// Stream operator for one-liner report output.
+inline std::wostream& operator<<(std::wostream& os,
+                                  const stats_observer& stats)
+{
+    return os << stats.report();
+}
+
 } // namespace dasmig::ext
 
 #endif // DASMIG_EXT_STATS_OBSERVER_HPP

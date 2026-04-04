@@ -1,5 +1,7 @@
 # Entity Generator for C++
 
+> **Requires C++23** (e.g., `-std=c++23` for GCC/Clang, `/std:c++latest` for MSVC).
+
 [![Entity Generator for C++](https://raw.githubusercontent.com/dasmig/entity-generator/master/doc/entity-generator.png)](https://github.com/dasmig/entity-generator/releases)
 
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/dasmig/entity-generator/main/LICENSE)
@@ -103,4 +105,4 @@ auto seeded = eg::instance().generate(42);
 
 For the complete feature guide — component dependencies, custom types, seed signatures, batch generation, groups, weights, validation, event hooks, extensions, and more — see the **[Usage Guide](doc/usage.md)**.
 
-For planned features — concurrent generation, conditional components, structured serialization, EnTT integration, and more — see the **[Roadmap](doc/roadmap.md)**.
+For planned features — EnTT integration, Python/Node.js/.NET wrappers, and more — see the **[Roadmap](doc/roadmap.md)**.

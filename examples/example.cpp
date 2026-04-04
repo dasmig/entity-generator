@@ -383,6 +383,93 @@ int main()
     dasmig::eg::instance().generate_batch(10);
     std::wcout << L'\n' << stats->report();
     dasmig::eg::instance().remove_observer(stats);
+    // Component-level validation with retries.
+    std::wcout << L"\n--- Component validation ---\n";
+    {
+        class even_component : public dasmig::component
+        {
+          public:
+            std::wstring key() const override { return L"even"; }
+            std::any generate(const dasmig::generation_context& ctx) const override
+            { return ctx.random().get(1, 100); }
+            bool validate(const std::any& v) const override
+            { return std::any_cast<int>(v) % 2 == 0; }
+            std::wstring to_string(const std::any& v) const override
+            { return default_to_string(v); }
+        };
 
+        dasmig::eg gen;
+        gen.add(std::make_unique<even_component>());
+        gen.max_retries(50);
+        auto e = gen.generate();
+        std::wcout << L"Even value: " << e.get<int>(L"even") << L'\n';
+    }
+
+    // Entity keys and seed inspection.
+    std::wcout << L"\n--- Keys and seeds ---\n";
+    {
+        auto e = dasmig::eg::instance().generate();
+        std::wcout << L"Entity seed: " << e.seed() << L'\n';
+        std::wcout << L"Size: " << e.size() << L" components\n";
+        for (const auto& k : e.keys())
+            std::wcout << L"  " << k << L" seed=" << e.seed(k) << L'\n';
+    }
+
+    // Multiple observers.
+    std::wcout << L"\n--- Multiple observers ---\n";
+    {
+        auto stats2 = std::make_shared<dasmig::ext::stats_observer>();
+        auto log = std::make_shared<dasmig::ext::stats_observer>();
+        dasmig::eg::instance().add_observer(stats2);
+        dasmig::eg::instance().add_observer(log);
+        dasmig::eg::instance().generate();
+        std::wcout << L"Stats entities: " << stats2->entities_generated
+                   << L", Log entities: " << log->entities_generated << L'\n';
+        dasmig::eg::instance().clear_observers();
+    }
+
+    // Post-registration weight override.
+    std::wcout << L"\n--- Post-registration weight ---\n";
+    {
+        dasmig::eg gen;
+        gen.add(std::make_unique<dasmig::constant_component<int>>(L"x", 1));
+        gen.weight(L"x", 0.0); // exclude after registration
+        auto e = gen.generate();
+        std::wcout << L"Has x: " << (e.has(L"x") ? L"yes" : L"no") << L'\n';
+    }
+
+    // Independent instance (thread-safe pattern).
+    std::wcout << L"\n--- Independent instance ---\n";
+    {
+        dasmig::eg local;
+        local.add(std::make_unique<dasmig::constant_component<std::wstring>>(
+            L"msg", L"thread-local"));
+        auto e = local.generate();
+        std::wcout << e << L'\n';
+    }
+
+    // Error handling.
+    std::wcout << L"\n--- Error handling ---\n";
+    try
+    {
+        dasmig::eg gen;
+        auto e = gen.generate();
+        e.get<int>(L"nonexistent"); // throws
+    }
+    catch (const std::out_of_range& ex)
+    {
+        std::wcout << L"Caught: " << ex.what() << L'\n';
+    }
+
+    // clear() and introspection.
+    std::wcout << L"\n--- Clear and introspection ---\n";
+    {
+        dasmig::eg gen;
+        gen.add(std::make_unique<dasmig::constant_component<int>>(L"a", 1));
+        gen.add(std::make_unique<dasmig::constant_component<int>>(L"b", 2));
+        std::wcout << L"Count: " << gen.size() << L'\n';
+        gen.clear();
+        std::wcout << L"After clear: " << gen.size() << L'\n';
+    }
     return 0;
 }

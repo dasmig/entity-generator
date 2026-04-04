@@ -22,6 +22,8 @@ This guide covers every feature of the entity-generator library in detail. For a
 - [Event Hooks](#event-hooks)
 - [Conditional Components](#conditional-components)
 - [Generic Components](#generic-components)
+- [Entity Introspection](#entity-introspection)
+- [Generator Introspection](#generator-introspection)
 - [Extensions](#extensions)
 
 ## Defining Components
@@ -64,6 +66,8 @@ class age : public dasmig::component
 };
 ```
 
+`default_to_string()` handles `std::wstring`, `int`, `double`, `float`, `long`, and `bool`. All other types return `[?]` — override `to_string()` for custom types.
+
 ## Registering and Generating
 
 ```cpp
@@ -93,6 +97,11 @@ auto second = eg::instance().generate();
 eg::instance().unseed();
 ```
 
+**Behavior notes:**
+- `add()` with a key that already exists **replaces** the component in place, preserving registration order. Any existing weight override for that key persists.
+- `remove()` on a non-existent key is a **no-op** (does not throw).
+- `remove_group()` on a non-existent group is a **no-op**.
+
 ## Typed Retrieval
 
 ```cpp
@@ -102,8 +111,14 @@ auto entity = eg::instance().generate();
 std::wstring char_class = entity.get<std::wstring>(L"class");
 int char_age = entity.get<int>(L"age");
 
+// Type-erased access (returns const std::any&).
+const auto& raw = entity.get_any(L"class");
+
 // Check if a component exists.
 if (entity.has(L"name")) { /* ... */ }
+
+// Iterate over all keys in generation order.
+for (const auto& key : entity.keys()) { /* ... */ }
 ```
 
 ## Component Dependencies
@@ -469,6 +484,8 @@ eg::instance().clear_observers();
 
 Multiple observers fire in registration order. The same observer can be added more than once.
 
+**Thread safety:** Observers are **not** thread-safe by default. When using `generate_batch_async`, the caller is responsible for ensuring observer implementations are safe for concurrent invocation (e.g., using atomics or mutexes).
+
 The full set of hooks (6 before/after pairs + 3 single-fire hooks, 15 methods):
 
 | Event | Hook(s) |
@@ -584,6 +601,48 @@ auto fmt = [](int v) { return L"#" + std::to_wstring(v); };
 gen.add(std::make_unique<dasmig::constant_component<int, decltype(fmt)>>(
     L"id", 5, fmt));
 // to_map()["id"] == "#5"
+```
+
+## Entity Introspection
+
+```cpp
+auto entity = eg::instance().generate();
+
+// Number of component values.
+std::size_t n = entity.size();
+
+// Check if empty.
+if (entity.empty()) { /* ... */ }
+
+// All keys in generation order.
+auto keys = entity.keys();
+
+// Type-erased access.
+const std::any& val = entity.get_any(L"class");
+
+// Seed of the entity and individual components.
+auto entity_seed = entity.seed();
+auto comp_seed = entity.seed(L"class");
+
+// Display string map.
+auto m = entity.to_map(); // map<wstring, wstring>
+```
+
+## Generator Introspection
+
+```cpp
+dasmig::eg gen;
+gen.add(std::make_unique<age>())
+   .add(std::make_unique<character_class>());
+
+// Number of registered components.
+std::size_t n = gen.size(); // 2
+
+// All registered keys in registration order.
+auto keys = gen.component_keys(); // {"age", "class"}
+
+// Remove everything (components, weight overrides, groups).
+gen.clear();
 ```
 
 ## Extensions
