@@ -120,7 +120,7 @@ class component
     /// @param value The value to validate.
     /// @return `true` to accept, `false` to retry generation.
     /// @see eg::max_retries()
-    [[nodiscard]] virtual bool validate(const std::any& /*value*/) const
+    [[nodiscard]] virtual bool validate([[maybe_unused]] const std::any& value) const
     {
         return true;
     }
@@ -132,7 +132,7 @@ class component
     /// @param ctx Context with previously generated component values.
     /// @return `true` to generate, `false` to skip.
     [[nodiscard]] virtual bool should_generate(
-        const generation_context& /*ctx*/) const
+        [[maybe_unused]] const generation_context& ctx) const
     {
         return true;
     }
@@ -593,7 +593,7 @@ class generation_observer
     virtual void on_before_generate() {}
     /// @brief Called after an entity is successfully generated.
     /// @param e The generated entity.
-    virtual void on_after_generate(const entity& /*e*/) {}
+    virtual void on_after_generate([[maybe_unused]] const entity& e) {}
 
     /// @}
     /// @name Component Generation
@@ -601,12 +601,12 @@ class generation_observer
 
     /// @brief Called before a component is generated.
     /// @param key The component key about to be generated.
-    virtual void on_before_component(const std::wstring& /*key*/) {}
+    virtual void on_before_component([[maybe_unused]] const std::wstring& key) {}
     /// @brief Called after a component is successfully generated.
     /// @param key The component key.
     /// @param value The generated value.
-    virtual void on_after_component(const std::wstring& /*key*/,
-                                    const std::any& /*value*/) {}
+    virtual void on_after_component([[maybe_unused]] const std::wstring& key,
+                                    [[maybe_unused]] const std::any& value) {}
 
     /// @}
     /// @name Component Skip
@@ -614,7 +614,7 @@ class generation_observer
 
     /// @brief Called when a component is skipped (weight roll or conditional exclusion).
     /// @param key The skipped component key.
-    virtual void on_skip(const std::wstring& /*key*/) {}
+    virtual void on_skip([[maybe_unused]] const std::wstring& key) {}
 
     /// @}
     /// @name Component Validation
@@ -623,19 +623,19 @@ class generation_observer
     /// @brief Called before a component validation retry.
     /// @param key The component key being retried.
     /// @param attempt The retry attempt number (1-based).
-    virtual void on_before_retry(const std::wstring& /*key*/,
-                                 std::size_t /*attempt*/) {}
+    virtual void on_before_retry([[maybe_unused]] const std::wstring& key,
+                                 [[maybe_unused]] std::size_t attempt) {}
     /// @brief Called after a component validation retry.
     /// @param key The component key.
     /// @param attempt The retry attempt number.
     /// @param value The newly generated value.
-    virtual void on_after_retry(const std::wstring& /*key*/,
-                                std::size_t /*attempt*/,
-                                const std::any& /*value*/) {}
+    virtual void on_after_retry([[maybe_unused]] const std::wstring& key,
+                                [[maybe_unused]] std::size_t attempt,
+                                [[maybe_unused]] const std::any& value) {}
 
     /// @brief Called when component validation is exhausted (precedes exception).
     /// @param key The failed component key.
-    virtual void on_component_fail(const std::wstring& /*key*/) {}
+    virtual void on_component_fail([[maybe_unused]] const std::wstring& key) {}
 
     /// @}
     /// @name Entity Validation
@@ -643,10 +643,10 @@ class generation_observer
 
     /// @brief Called before an entity validation retry.
     /// @param attempt The entity retry attempt number (1-based).
-    virtual void on_before_entity_retry(std::size_t /*attempt*/) {}
+    virtual void on_before_entity_retry([[maybe_unused]] std::size_t attempt) {}
     /// @brief Called after an entity validation retry.
     /// @param attempt The entity retry attempt number.
-    virtual void on_after_entity_retry(std::size_t /*attempt*/) {}
+    virtual void on_after_entity_retry([[maybe_unused]] std::size_t attempt) {}
 
     /// @brief Called when entity validation is exhausted (precedes exception).
     virtual void on_entity_fail() {}
@@ -657,17 +657,17 @@ class generation_observer
 
     /// @brief Called before a component is registered.
     /// @param key The component key being added.
-    virtual void on_before_add(const std::wstring& /*key*/) {}
+    virtual void on_before_add([[maybe_unused]] const std::wstring& key) {}
     /// @brief Called after a component is registered.
     /// @param key The component key that was added.
-    virtual void on_after_add(const std::wstring& /*key*/) {}
+    virtual void on_after_add([[maybe_unused]] const std::wstring& key) {}
 
     /// @brief Called before a component is removed.
     /// @param key The component key being removed.
-    virtual void on_before_remove(const std::wstring& /*key*/) {}
+    virtual void on_before_remove([[maybe_unused]] const std::wstring& key) {}
     /// @brief Called after a component is removed.
     /// @param key The component key that was removed.
-    virtual void on_after_remove(const std::wstring& /*key*/) {}
+    virtual void on_after_remove([[maybe_unused]] const std::wstring& key) {}
 
     /// @}
 };
@@ -684,14 +684,11 @@ class eg
     /// @brief Default constructor creates an empty generator.
     eg() = default;
 
-    /// @brief Move-only: components are held via unique_ptr.
-    /// @{
-    eg(const eg&) = delete;
-    eg& operator=(const eg&) = delete;
-    eg(eg&&) = default;
-    eg& operator=(eg&&) = default;
-    ~eg() = default;
-    /// @}
+    eg(const eg&) = delete;            ///< Not copyable.
+    eg& operator=(const eg&) = delete; ///< Not copyable.
+    eg(eg&&) = default;                ///< Move constructor.
+    eg& operator=(eg&&) = default;     ///< Move assignment.
+    ~eg() = default;                   ///< Default destructor.
 
     /// @brief Access the global singleton instance.
     ///

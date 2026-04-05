@@ -33,10 +33,7 @@ STRIP_CODE_COMMENTS    = NO
 BUILTIN_STL_SUPPORT    = YES
 ENABLE_PREPROCESSING   = YES
 MACRO_EXPANSION        = YES
-PREDEFINED             = DASMIG_ENTITYGEN_HPP \
-                         DASMIG_EXT_STATS_OBSERVER_HPP \
-                         DASMIG_EXT_ENTT_ADAPTER_HPP \
-                         DASMIG_EXT_FLECS_ADAPTER_HPP
+PREDEFINED             =
 
 # Exclude deps/ (vendored third-party headers) and random.hpp (vendored).
 EXCLUDE_PATTERNS       = */deps/*
@@ -46,6 +43,7 @@ EXCLUDE                = dasmig/random.hpp
 
 WARN_IF_UNDOCUMENTED   = YES
 WARN_IF_DOC_ERROR      = YES
+WARN_NO_PARAMDOC       = NO
 
 # --- Output formats --------------------------------------------------------
 
@@ -65,4 +63,3 @@ GENERATE_XML           = NO
 # --- Graphs ----------------------------------------------------------------
 
 HAVE_DOT               = NO
-CLASS_DIAGRAMS         = YES

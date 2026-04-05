@@ -114,4 +114,4 @@ auto seeded = eg::instance().generate(42);
 
 For the complete feature guide — component dependencies, custom types, seed signatures, batch generation, groups, weights, validation, event hooks, extensions, and more — see the **[Usage Guide](doc/usage.md)**.
 
-For planned features — Python/Node.js/.NET wrappers and more — see the **[Roadmap](doc/roadmap.md)**.
+For planned features — Python/Node.js/.NET wrappers and more — see the **[Roadmap](https://github.com/dasmig/entity-generator/blob/main/doc/roadmap.md)**.

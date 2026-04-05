@@ -4,30 +4,33 @@ This guide covers every feature of the entity-generator library in detail. For a
 
 [TOC]
 
-- [Defining Components](#defining-components)
-- [Registering and Generating](#registering-and-generating)
-- [Typed Retrieval](#typed-retrieval)
-- [Component Dependencies](#component-dependencies)
-- [Composing with Other Generators](#composing-with-other-generators)
-- [Custom Types](#custom-types)
-- [Seed Signatures](#seed-signatures)
-- [Batch Generation](#batch-generation)
-- [Component Groups](#component-groups)
-- [Thread Safety](#thread-safety)
-- [Component Weights](#component-weights)
-- [Entity Serialization](#entity-serialization)
-- [Structured Serialization](#structured-serialization)
-- [Concurrent Batch Generation](#concurrent-batch-generation)
-- [Validation Hooks](#validation-hooks)
-- [Event Hooks](#event-hooks)
-- [Conditional Components](#conditional-components)
-- [Generic Components](#generic-components)
-- [Entity Introspection](#entity-introspection)
-- [Generator Introspection](#generator-introspection)
-- [Extensions](#extensions)
-- [ECS Integration: EnTT](#ecs-integration-entt)
-- [ECS Integration: Flecs](#ecs-integration-flecs)
-- [Error Reference](#error-reference)
+<!-- GitHub-rendered TOC (Doxygen uses [TOC] above instead) -->
+<ul>
+<li><a href="#defining-components">Defining Components</a></li>
+<li><a href="#registering-and-generating">Registering and Generating</a></li>
+<li><a href="#typed-retrieval">Typed Retrieval</a></li>
+<li><a href="#component-dependencies">Component Dependencies</a></li>
+<li><a href="#composing-with-other-generators">Composing with Other Generators</a></li>
+<li><a href="#custom-types">Custom Types</a></li>
+<li><a href="#seed-signatures">Seed Signatures</a></li>
+<li><a href="#batch-generation">Batch Generation</a></li>
+<li><a href="#component-groups">Component Groups</a></li>
+<li><a href="#thread-safety">Thread Safety</a></li>
+<li><a href="#component-weights">Component Weights</a></li>
+<li><a href="#entity-serialization">Entity Serialization</a></li>
+<li><a href="#structured-serialization">Structured Serialization</a></li>
+<li><a href="#concurrent-batch-generation">Concurrent Batch Generation</a></li>
+<li><a href="#validation-hooks">Validation Hooks</a></li>
+<li><a href="#event-hooks">Event Hooks</a></li>
+<li><a href="#conditional-components">Conditional Components</a></li>
+<li><a href="#generic-components">Generic Components</a></li>
+<li><a href="#entity-introspection">Entity Introspection</a></li>
+<li><a href="#generator-introspection">Generator Introspection</a></li>
+<li><a href="#extensions">Extensions</a></li>
+<li><a href="#ecs-integration-entt">ECS Integration: EnTT</a></li>
+<li><a href="#ecs-integration-flecs">ECS Integration: Flecs</a></li>
+<li><a href="#error-reference">Error Reference</a></li>
+</ul>
 
 ## Defining Components
 

@@ -73,7 +73,9 @@ class stats_observer : public generation_observer
 
     /// @name Value Distribution
     /// @{
-    /// Per-component key, counts how many times each display string appeared.
+
+    /// @brief Per-component key, counts how many times each display string appeared.
+    ///
     /// Useful for analysing uniformity of random components.
     std::map<std::wstring,
              std::map<std::wstring, std::size_t>> value_distribution;
