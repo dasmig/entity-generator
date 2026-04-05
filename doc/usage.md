@@ -2,7 +2,7 @@
 
 This guide covers every feature of the entity-generator library in detail. For a quick overview, see the [README](../README.md). For the full API reference, run `doxygen Doxyfile` from the repository root and open `doc/api/html/index.html`.
 
-## Table of Contents
+[TOC]
 
 - [Defining Components](#defining-components)
 - [Registering and Generating](#registering-and-generating)

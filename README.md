@@ -9,8 +9,8 @@
 [![GitHub Releases](https://img.shields.io/github/release/dasmig/entity-generator.svg)](https://github.com/dasmig/entity-generator/releases)
 [![GitHub Issues](https://img.shields.io/github/issues/dasmig/entity-generator.svg)](https://github.com/dasmig/entity-generator/issues)
 [![C++23](https://img.shields.io/badge/standard-C%2B%2B23-blue.svg)](https://en.cppreference.com/w/cpp/23)
-[![Header-only](https://img.shields.io/badge/type-header--only-green.svg)](#integration)
-[![Platform](https://img.shields.io/badge/platform-linux%20%7C%20windows%20%7C%20macos-lightgrey.svg)](#)
+[![Header-only](https://img.shields.io/badge/type-header--only-green.svg)](https://github.com/dasmig/entity-generator#integration)
+[![Platform](https://img.shields.io/badge/platform-linux%20|%20windows%20|%20macos-lightgrey.svg)](https://github.com/dasmig/entity-generator)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue.svg)](https://dasmig.github.io/entity-generator/)
 
 **[API Reference](https://dasmig.github.io/entity-generator/)** · **[Usage Guide](doc/usage.md)** · **[Releases](https://github.com/dasmig/entity-generator/releases)**

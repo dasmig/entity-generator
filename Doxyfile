@@ -38,8 +38,9 @@ PREDEFINED             = DASMIG_ENTITYGEN_HPP \
                          DASMIG_EXT_ENTT_ADAPTER_HPP \
                          DASMIG_EXT_FLECS_ADAPTER_HPP
 
-# Exclude deps/ (vendored third-party headers).
+# Exclude deps/ (vendored third-party headers) and random.hpp (vendored).
 EXCLUDE_PATTERNS       = */deps/*
+EXCLUDE                = dasmig/random.hpp
 
 # --- Warnings -------------------------------------------------------------
 
@@ -55,6 +56,7 @@ HTML_COLORSTYLE        = LIGHT
 GENERATE_TREEVIEW      = YES
 DISABLE_INDEX          = NO
 FULL_SIDEBAR           = NO
+TOC_INCLUDE_HEADINGS   = 3
 
 GENERATE_LATEX         = NO
 GENERATE_MAN           = NO
