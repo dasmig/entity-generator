@@ -11,7 +11,7 @@ TEST_BIN := $(BUILD)/test_runner
 COV_FLAGS := -fprofile-instr-generate -fcoverage-mapping
 COV_DIR   := coverage
 
-.PHONY: all clean lint test coverage
+.PHONY: all clean lint test coverage docs
 
 all: $(EXAMPLE_BIN)
 
@@ -35,8 +35,12 @@ coverage: $(TEST_SRC) dasmig/entitygen.hpp dasmig/random.hpp | $(BUILD)
 $(BUILD):
 	@mkdir -p $(BUILD)
 
+docs:
+	doxygen Doxyfile
+	@echo "API docs: doc/api/html/index.html"
+
 lint:
 	clang-tidy $(EXAMPLE_SRC) -- $(CXXFLAGS)
 
 clean:
-	rm -rf $(BUILD) $(COV_DIR)
+	rm -rf $(BUILD) $(COV_DIR) doc/api

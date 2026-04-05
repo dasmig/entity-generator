@@ -19,32 +19,46 @@
 #include <type_traits>
 #include <vector>
 
-// Written by Diego Dasso Migotto - diegomigotto at hotmail dot com
+/// @file entitygen.hpp
+/// @brief Entity generator library — composable, deterministic entity generation for C++23.
+/// @author Diego Dasso Migotto (diegomigotto at hotmail dot com)
+/// @see See doc/usage.md for the narrative tutorial.
 namespace dasmig
 {
 
 // Forward declaration.
 class eg;
 
-// Context passed to components during generation, providing access to
-// previously generated component values and a seeded random engine.
+/// @brief Context passed to components during generation.
+///
+/// Provides access to previously generated component values and a seeded
+/// random engine. Created and populated by the entity generator; not
+/// user-constructible.
+/// @see component::generate()
 class generation_context
 {
   public:
-    // Check if a component value has already been generated.
+    /// @brief Check if a component value has already been generated.
+    /// @param component_key The component key to look up.
+    /// @return `true` if a value for the key exists in the context.
     [[nodiscard]] bool has(const std::wstring& component_key) const
     {
         return _values.contains(component_key);
     }
 
-    // Typed retrieval of an already-generated component value by key.
+    /// @brief Typed retrieval of an already-generated component value.
+    /// @tparam T The expected type of the stored value.
+    /// @param component_key The component key to retrieve.
+    /// @return The value cast to @p T.
+    /// @throws std::bad_any_cast If @p T does not match the stored type.
     template <typename T>
     [[nodiscard]] T get(const std::wstring& component_key) const
     {
         return std::any_cast<T>(_values.at(component_key));
     }
 
-    // Access the random engine for this generation.
+    /// @brief Access the random engine for this generation.
+    /// @return A reference to the per-component seeded random engine.
     [[nodiscard]] effolkronium::random_local& random() const
     {
         return _random;
@@ -64,41 +78,59 @@ class generation_context
     friend class eg;
 };
 
-// Abstract base for entity components. Implement this interface to define
-// custom components that the entity generator can produce.
+/// @brief Abstract base for entity components.
+///
+/// Implement this interface to define custom components that the entity
+/// generator can produce. Each component has a unique key, generates typed
+/// random values, and converts them to display strings.
+/// @see generation_context, eg::add()
 class component
 {
   public:
-    // Virtual destructor to ensure proper cleanup of derived classes.
+    /// @brief Virtual destructor for proper cleanup of derived classes.
     virtual ~component() = default;
 
-    // Unique key identifying this component (e.g. "name", "age", "class").
+    /// @brief Unique key identifying this component (e.g. `"name"`, `"age"`).
+    /// @return The component key as a wide string.
     [[nodiscard]] virtual std::wstring key() const = 0;
 
-    // Generate a random value for this component. The context provides access
-    // to previously generated component values and a seeded random engine.
+    /// @brief Generate a random value for this component.
+    /// @param ctx Context providing access to previously generated values
+    ///            and a seeded random engine.
+    /// @return The generated value wrapped in `std::any`.
     [[nodiscard]] virtual std::any generate(
         const generation_context& ctx) const = 0;
 
-    // Convert a generated value to a displayable string. Derived classes must
-    // implement this. Use default_to_string() for standard type handling.
+    /// @brief Convert a generated value to a displayable string.
+    /// @param value The value previously returned by generate().
+    /// @return A human-readable wide-string representation.
+    /// @see default_to_string()
     [[nodiscard]] virtual std::wstring to_string(const std::any& value) const = 0;
 
-    // Inclusion weight for this component (0.0 to 1.0). A value of 1.0 means
-    // always included; 0.5 means included roughly half the time. The generator
-    // may override this value per-component at registration time.
+    /// @brief Inclusion weight for this component (0.0 to 1.0).
+    ///
+    /// A value of 1.0 means always included; 0.5 means included roughly
+    /// half the time. The generator may override this per-component at
+    /// registration time via eg::add(comp, weight) or eg::weight().
+    /// @return The inclusion probability.
+    /// @see eg::weight()
     [[nodiscard]] virtual double weight() const { return 1.0; }
 
-    // Validate a generated value. Return true to accept, false to retry.
-    // Called automatically during generation. Default always accepts.
+    /// @brief Validate a generated value.
+    /// @param value The value to validate.
+    /// @return `true` to accept, `false` to retry generation.
+    /// @see eg::max_retries()
     [[nodiscard]] virtual bool validate(const std::any& /*value*/) const
     {
         return true;
     }
 
-    // Decide whether this component should be generated based on the
-    // current context. Unlike weight (probabilistic), this is logic-driven.
-    // Return false to skip generation entirely. Default always generates.
+    /// @brief Decide whether this component should be generated.
+    ///
+    /// Unlike weight() (probabilistic), this is logic-driven. Return
+    /// `false` to skip generation entirely based on the current context.
+    /// @param ctx Context with previously generated component values.
+    /// @return `true` to generate, `false` to skip.
     [[nodiscard]] virtual bool should_generate(
         const generation_context& /*ctx*/) const
     {
@@ -106,8 +138,12 @@ class component
     }
 
   protected:
-    // Default conversion covering common standard types. Derived classes can
-    // call this from their to_string() implementation.
+    /// @brief Default conversion covering common standard types.
+    ///
+    /// Handles `std::wstring`, `int`, `double`, `float`, `long`, and `bool`.
+    /// Returns `"[?]"` for unrecognized types.
+    /// @param value The value to convert.
+    /// @return A wide-string representation.
     [[nodiscard]] static std::wstring default_to_string(const std::any& value)
     {
         if (value.type() == typeid(std::wstring))
@@ -139,18 +175,25 @@ class component
     }
 };
 
-// ---------------------------------------------------------------------------
-// Generic components — reusable templates for common patterns.
-// ---------------------------------------------------------------------------
+/// @name Generic Components
+/// @brief Reusable component templates for common patterns.
+/// @{
 
-// Tag type indicating that generic components should use default_to_string.
+/// @brief Tag type indicating that generic components should use default_to_string().
 struct use_default_formatter {};
 
-// Component that always returns the same value.
+/// @brief Component that always returns a fixed value.
+/// @tparam T The value type.
+/// @tparam Formatter Optional callable for custom string conversion
+///                    (defaults to use_default_formatter).
 template <typename T, typename Formatter = use_default_formatter>
 class constant_component : public component
 {
   public:
+    /// @brief Construct a constant component.
+    /// @param key Unique component key.
+    /// @param value The fixed value to always return.
+    /// @param fmt Optional custom formatter.
     explicit constant_component(std::wstring key, T value,
                                 Formatter fmt = {})
         : _key{std::move(key)}, _value{std::move(value)},
@@ -178,11 +221,18 @@ class constant_component : public component
     Formatter _fmt;
 };
 
-// Component that picks uniformly at random from a list of values.
+/// @brief Component that picks uniformly at random from a list of values.
+/// @tparam T The value type.
+/// @tparam Formatter Optional callable for custom string conversion.
 template <typename T, typename Formatter = use_default_formatter>
 class choice_component : public component
 {
   public:
+    /// @brief Construct a choice component.
+    /// @param key Unique component key.
+    /// @param choices Non-empty list of values to choose from.
+    /// @param fmt Optional custom formatter.
+    /// @throws std::invalid_argument If @p choices is empty.
     explicit choice_component(std::wstring key, std::vector<T> choices,
                               Formatter fmt = {})
         : _key{std::move(key)}, _choices{std::move(choices)},
@@ -214,13 +264,19 @@ class choice_component : public component
     Formatter _fmt;
 };
 
-// Component that generates a uniform random value in [lo, hi].
-// Restricted to arithmetic types (int, double, float, etc.).
+/// @brief Component that generates a uniform random value in [lo, hi].
+/// @tparam T An arithmetic type (`int`, `double`, `float`, etc.).
+/// @tparam Formatter Optional callable for custom string conversion.
 template <typename T, typename Formatter = use_default_formatter>
     requires std::is_arithmetic_v<T>
 class range_component : public component
 {
   public:
+    /// @brief Construct a range component.
+    /// @param key Unique component key.
+    /// @param lo Lower bound (inclusive).
+    /// @param hi Upper bound (inclusive).
+    /// @param fmt Optional custom formatter.
     explicit range_component(std::wstring key, T lo, T hi,
                              Formatter fmt = {})
         : _key{std::move(key)}, _lo{lo}, _hi{hi}, _fmt{std::move(fmt)} {}
@@ -248,12 +304,21 @@ class range_component : public component
     Formatter _fmt;
 };
 
-// Component that wraps a callable taking generation_context and returning T.
-// Avoids subclassing entirely for one-off or computed components.
+/// @brief Component that wraps a callable for one-off or computed values.
+///
+/// Avoids subclassing component entirely. The callable receives a
+/// generation_context and returns a value of type @p T.
+/// @tparam T The return type of the callable.
+/// @tparam GenFn Callable type taking `const generation_context&`.
+/// @tparam Formatter Optional callable for custom string conversion.
 template <typename T, typename GenFn, typename Formatter = use_default_formatter>
 class callback_component : public component
 {
   public:
+    /// @brief Construct a callback component.
+    /// @param key Unique component key.
+    /// @param fn Callable invoked during generation.
+    /// @param fmt Optional custom formatter.
     explicit callback_component(std::wstring key, GenFn fn,
                                 Formatter fmt = {})
         : _key{std::move(key)}, _fn{std::move(fn)}, _fmt{std::move(fmt)} {}
@@ -280,27 +345,39 @@ class callback_component : public component
     Formatter _fmt;
 };
 
-// Deduction guide for callback_component so users don't need to spell
-// the lambda type.
+/// @brief Deduction guide for callback_component.
+///
+/// Deduces @p T from the return type of @p GenFn so users don't need
+/// to spell out the lambda type explicitly.
 template <typename GenFn, typename Formatter = use_default_formatter>
 callback_component(std::wstring, GenFn, Formatter = {})
     -> callback_component<
            std::invoke_result_t<GenFn, const generation_context&>,
            GenFn, Formatter>;
 
-// Component that picks from a list of values using per-option weights.
-// Weights are relative (they don't need to sum to 1.0). A weight of 0
-// means the option is never selected.
+/// @brief Component that picks from a list of values using per-option weights.
+///
+/// Weights are relative (they don't need to sum to 1.0). A weight of 0
+/// means the option is never selected.
+/// @tparam T The value type.
+/// @tparam Formatter Optional callable for custom string conversion.
 template <typename T, typename Formatter = use_default_formatter>
 class weighted_choice_component : public component
 {
   public:
+    /// @brief A value–weight pair for weighted selection.
     struct option
     {
-        T value;
-        double weight;
+        T value;         ///< The selectable value.
+        double weight;   ///< Relative selection weight (must be >= 0).
     };
 
+    /// @brief Construct a weighted choice component.
+    /// @param key Unique component key.
+    /// @param options Non-empty list of value–weight pairs. At least one
+    ///                must have a positive weight.
+    /// @param fmt Optional custom formatter.
+    /// @throws std::invalid_argument If @p options is empty or all weights are zero.
     explicit weighted_choice_component(std::wstring key,
                                        std::vector<option> options,
                                        Formatter fmt = {})
@@ -344,26 +421,40 @@ class weighted_choice_component : public component
     Formatter _fmt;
 };
 
-// Internal class representing a generated entity. Holds component values
-// produced by the entity generator in registration order.
+/// @}
+
+/// @brief A generated entity holding component values in registration order.
+///
+/// Entities are produced by eg::generate() and provide typed access to
+/// component values, seed signatures for replay, and serialization.
+/// @see eg::generate()
 class entity
 {
   public:
-    // Typed retrieval of a component value by key. The caller must know the
-    // type that the component produces.
+    /// @brief Typed retrieval of a component value by key.
+    /// @tparam T The expected type of the stored value.
+    /// @param component_key The component key to retrieve.
+    /// @return The value cast to @p T.
+    /// @throws std::out_of_range If the key is not present.
+    /// @throws std::bad_any_cast If @p T does not match the stored type.
     template <typename T>
     [[nodiscard]] T get(const std::wstring& component_key) const
     {
         return std::any_cast<T>(find_value(component_key));
     }
 
-    // Type-erased retrieval of a component value by key.
+    /// @brief Type-erased retrieval of a component value by key.
+    /// @param component_key The component key to retrieve.
+    /// @return A const reference to the stored `std::any`.
+    /// @throws std::out_of_range If the key is not present.
     [[nodiscard]] const std::any& get_any(const std::wstring& component_key) const
     {
         return find_value(component_key);
     }
 
-    // Check if a component value exists by key.
+    /// @brief Check if a component value exists by key.
+    /// @param component_key The component key to look up.
+    /// @return `true` if the entity contains a value for the key.
     [[nodiscard]] bool has(const std::wstring& component_key) const
     {
         return std::ranges::any_of(_entries, [&component_key](const auto& e) {
@@ -371,8 +462,10 @@ class entity
         });
     }
 
-    // Retrieve the random seed used to generate a specific component.
-    // This seed can be used to reproduce the component's random values.
+    /// @brief Retrieve the random seed used to generate a specific component.
+    /// @param component_key The component key.
+    /// @return The per-component seed for replay.
+    /// @throws std::out_of_range If the key is not present.
     [[nodiscard]] std::uint64_t seed(const std::wstring& component_key) const
     {
         auto it = std::ranges::find(_entries, component_key, &entry::key);
@@ -385,14 +478,17 @@ class entity
         return it->seed;
     }
 
-    // Retrieve the random seed used to generate this entity. This seed
-    // can reproduce all component seeds and thus the entire entity.
+    /// @brief Retrieve the random seed used to generate this entity.
+    ///
+    /// This seed can reproduce all component seeds and thus the entire entity.
+    /// @return The entity-level seed.
     [[nodiscard]] std::uint64_t seed() const
     {
         return _seed;
     }
 
-    // Get all component keys present in this entity, in generation order.
+    /// @brief Get all component keys present in this entity, in generation order.
+    /// @return A vector of component keys.
     [[nodiscard]] std::vector<std::wstring> keys() const
     {
         std::vector<std::wstring> result;
@@ -401,7 +497,8 @@ class entity
         return result;
     }
 
-    // Return component values as a map of key to display string.
+    /// @brief Return component values as a map of key to display string.
+    /// @return An ordered map of key → formatted value.
     [[nodiscard]] std::map<std::wstring, std::wstring> to_map() const
     {
         std::map<std::wstring, std::wstring> result;
@@ -412,14 +509,16 @@ class entity
         return result;
     }
 
-    // Number of component values in this entity.
+    /// @brief Number of component values in this entity.
     [[nodiscard]] std::size_t size() const { return _entries.size(); }
 
-    // Check if the entity has no component values.
+    /// @brief Check if the entity has no component values.
     [[nodiscard]] bool empty() const { return _entries.empty(); }
 
-    // Convert all component values to a single formatted string.
-    // Each entry is rendered as "key: display" separated by "  ".
+    /// @brief Convert all component values to a single formatted string.
+    ///
+    /// Each entry is rendered as `"key: display"` separated by two spaces.
+    /// @return The formatted string, or empty if the entity is empty.
     [[nodiscard]] std::wstring to_string() const
     {
         auto parts = _entries
@@ -433,7 +532,7 @@ class entity
             }).value_or(std::wstring{});
     }
 
-    // Operator ostream streaming all component values in generation order.
+    /// @brief Stream all component values in generation order.
     friend std::wostream& operator<<(std::wostream& wos, const entity& e)
     {
         return wos << e.to_string();
@@ -476,81 +575,144 @@ class entity
     friend class eg;
 };
 
-// Observer interface for hooking into generation lifecycle events.
-// Override only the methods you care about; all default to no-ops.
+/// @brief Observer interface for hooking into generation lifecycle events.
+///
+/// Override only the methods you care about; all default to no-ops.
+/// Multiple observers can be attached to a generator via eg::add_observer().
+/// @see eg::add_observer(), dasmig::ext::stats_observer
 class generation_observer
 {
   public:
+    /// @brief Virtual destructor.
     virtual ~generation_observer() = default;
 
-    // Entity lifecycle.
+    /// @name Entity Lifecycle
+    /// @{
+
+    /// @brief Called before an entity is generated.
     virtual void on_before_generate() {}
+    /// @brief Called after an entity is successfully generated.
+    /// @param e The generated entity.
     virtual void on_after_generate(const entity& /*e*/) {}
 
-    // Component generation.
+    /// @}
+    /// @name Component Generation
+    /// @{
+
+    /// @brief Called before a component is generated.
+    /// @param key The component key about to be generated.
     virtual void on_before_component(const std::wstring& /*key*/) {}
+    /// @brief Called after a component is successfully generated.
+    /// @param key The component key.
+    /// @param value The generated value.
     virtual void on_after_component(const std::wstring& /*key*/,
                                     const std::any& /*value*/) {}
 
-    // Component skip (weight roll or conditional exclusion).
+    /// @}
+    /// @name Component Skip
+    /// @{
+
+    /// @brief Called when a component is skipped (weight roll or conditional exclusion).
+    /// @param key The skipped component key.
     virtual void on_skip(const std::wstring& /*key*/) {}
 
-    // Component validation retry (attempt is 1-based).
+    /// @}
+    /// @name Component Validation
+    /// @{
+
+    /// @brief Called before a component validation retry.
+    /// @param key The component key being retried.
+    /// @param attempt The retry attempt number (1-based).
     virtual void on_before_retry(const std::wstring& /*key*/,
                                  std::size_t /*attempt*/) {}
+    /// @brief Called after a component validation retry.
+    /// @param key The component key.
+    /// @param attempt The retry attempt number.
+    /// @param value The newly generated value.
     virtual void on_after_retry(const std::wstring& /*key*/,
                                 std::size_t /*attempt*/,
                                 const std::any& /*value*/) {}
 
-    // Component validation failure (terminal, precedes exception).
+    /// @brief Called when component validation is exhausted (precedes exception).
+    /// @param key The failed component key.
     virtual void on_component_fail(const std::wstring& /*key*/) {}
 
-    // Entity validation retry (attempt is 1-based).
+    /// @}
+    /// @name Entity Validation
+    /// @{
+
+    /// @brief Called before an entity validation retry.
+    /// @param attempt The entity retry attempt number (1-based).
     virtual void on_before_entity_retry(std::size_t /*attempt*/) {}
+    /// @brief Called after an entity validation retry.
+    /// @param attempt The entity retry attempt number.
     virtual void on_after_entity_retry(std::size_t /*attempt*/) {}
 
-    // Entity validation failure (terminal, precedes exception).
+    /// @brief Called when entity validation is exhausted (precedes exception).
     virtual void on_entity_fail() {}
 
-    // Component registration.
+    /// @}
+    /// @name Component Registration
+    /// @{
+
+    /// @brief Called before a component is registered.
+    /// @param key The component key being added.
     virtual void on_before_add(const std::wstring& /*key*/) {}
+    /// @brief Called after a component is registered.
+    /// @param key The component key that was added.
     virtual void on_after_add(const std::wstring& /*key*/) {}
 
-    // Component removal.
+    /// @brief Called before a component is removed.
+    /// @param key The component key being removed.
     virtual void on_before_remove(const std::wstring& /*key*/) {}
+    /// @brief Called after a component is removed.
+    /// @param key The component key that was removed.
     virtual void on_after_remove(const std::wstring& /*key*/) {}
+
+    /// @}
 };
 
-// The entity generator generates entities with configurable components.
-// Components are registered by implementing the component interface and
-// adding them to the generator. Components are generated in registration
-// order, allowing later components to access earlier ones via context.
+/// @brief The entity generator — produces entities with configurable components.
+///
+/// Components are registered by implementing the component interface and
+/// adding them to the generator. Components are generated in registration
+/// order, allowing later components to access earlier ones via context.
+/// @see component, entity, generation_context
 class eg
 {
   public:
-    // Default constructor creates an empty generator.
+    /// @brief Default constructor creates an empty generator.
     eg() = default;
 
-    // Move-only: components are held via unique_ptr.
+    /// @brief Move-only: components are held via unique_ptr.
+    /// @{
     eg(const eg&) = delete;
     eg& operator=(const eg&) = delete;
     eg(eg&&) = default;
     eg& operator=(eg&&) = default;
     ~eg() = default;
+    /// @}
 
-    // Access the global singleton instance. For multi-threaded use,
-    // prefer creating independent eg instances instead.
+    /// @brief Access the global singleton instance.
+    ///
+    /// For multi-threaded use, prefer creating independent eg instances.
+    /// @return A reference to the singleton.
     static eg& instance()
     {
         static eg instance;
         return instance;
     }
 
-    // --- Registration ----------------------------------------------------
+    /// @name Registration
+    /// @{
 
-    // Register a component. Takes ownership of the component. If a component
-    // with the same key already exists, it will be replaced. Components are
-    // generated in the order they are registered.
+    /// @brief Register a component.
+    ///
+    /// Takes ownership of the component. If a component with the same key
+    /// already exists, it will be replaced. Components are generated in the
+    /// order they are registered.
+    /// @param comp The component to register (moved).
+    /// @return `*this` for chaining.
     eg& add(std::unique_ptr<component> comp)
     {
         const auto key = comp->key();
@@ -571,8 +733,12 @@ class eg
         return *this;
     }
 
-    // Register a component with a weight override. The override takes
-    // precedence over the component's own weight() method.
+    /// @brief Register a component with a weight override.
+    ///
+    /// The override takes precedence over the component's own weight() method.
+    /// @param comp The component to register (moved).
+    /// @param weight_override Inclusion probability override (0.0–1.0).
+    /// @return `*this` for chaining.
     eg& add(std::unique_ptr<component> comp, double weight_override)
     {
         const auto key = comp->key();
@@ -581,8 +747,11 @@ class eg
         return *this;
     }
 
-    // Set or update the weight override for an already-registered component.
-    // Throws std::out_of_range if the component is not registered.
+    /// @brief Set or update the weight override for a registered component.
+    /// @param component_key The component key.
+    /// @param weight_value New inclusion probability (0.0–1.0).
+    /// @return `*this` for chaining.
+    /// @throws std::out_of_range If the component is not registered.
     eg& weight(const std::wstring& component_key, double weight_value)
     {
         if (!has(component_key))
@@ -594,7 +763,9 @@ class eg
         return *this;
     }
 
-    // Remove a registered component by key.
+    /// @brief Remove a registered component by key.
+    /// @param component_key The component key to remove.
+    /// @return `*this` for chaining.
     eg& remove(const std::wstring& component_key)
     {
         notify(&generation_observer::on_before_remove, component_key);
@@ -608,7 +779,9 @@ class eg
         return *this;
     }
 
-    // Check if a component is registered by key.
+    /// @brief Check if a component is registered by key.
+    /// @param component_key The component key to look up.
+    /// @return `true` if a component with the key exists.
     [[nodiscard]] bool has(const std::wstring& component_key) const
     {
         return std::ranges::any_of(_components, [&component_key](const auto& entry) {
@@ -616,7 +789,8 @@ class eg
         });
     }
 
-    // Remove all registered components, weight overrides, and groups.
+    /// @brief Remove all registered components, weight overrides, and groups.
+    /// @return `*this` for chaining.
     eg& clear()
     {
         _components.clear();
@@ -625,10 +799,11 @@ class eg
         return *this;
     }
 
-    // Return the number of registered components.
+    /// @brief Return the number of registered components.
     [[nodiscard]] std::size_t size() const { return _components.size(); }
 
-    // Return all registered component keys in registration order.
+    /// @brief Return all registered component keys in registration order.
+    /// @return A vector of component keys.
     [[nodiscard]] std::vector<std::wstring> component_keys() const
     {
         std::vector<std::wstring> keys;
@@ -638,10 +813,16 @@ class eg
         return keys;
     }
 
-    // --- Seeding ---------------------------------------------------------
+    /// @}
+    /// @name Seeding
+    /// @{
 
-    // Seed the internal random engine. Subsequent generate() calls without
-    // an explicit seed will draw from this seeded sequence.
+    /// @brief Seed the internal random engine.
+    ///
+    /// Subsequent generate() calls without an explicit seed will draw from
+    /// this seeded sequence.
+    /// @param seed_value The seed value.
+    /// @return `*this` for chaining.
     eg& seed(std::uint64_t seed_value)
     {
         _engine.seed(static_cast<std::mt19937::result_type>(seed_value));
@@ -649,8 +830,10 @@ class eg
         return *this;
     }
 
-    // Reseed the internal engine with a non-deterministic source.
-    // Subsequent generate() calls will produce non-reproducible results.
+    /// @brief Reseed the engine with a non-deterministic source.
+    ///
+    /// Subsequent generate() calls will produce non-reproducible results.
+    /// @return `*this` for chaining.
     eg& unseed()
     {
         _engine.seed(std::random_device{}());
@@ -658,59 +841,81 @@ class eg
         return *this;
     }
 
-    // --- Validation ------------------------------------------------------
+    /// @}
+    /// @name Validation
+    /// @{
 
-    // Set an entity-level validation function. After each entity is fully
-    // generated, the validator is called. If it returns false, the entity
-    // is re-generated up to max_retries additional times.
+    /// @brief Set an entity-level validation function.
+    ///
+    /// After each entity is fully generated, the validator is called. If it
+    /// returns `false`, the entity is re-generated up to max_retries times.
+    /// @param fn Validator callable returning `true` to accept.
+    /// @return `*this` for chaining.
     eg& set_validator(std::function<bool(const entity&)> fn)
     {
         _validator = std::move(fn);
         return *this;
     }
 
-    // Remove the entity-level validation function.
+    /// @brief Remove the entity-level validation function.
+    /// @return `*this` for chaining.
     eg& clear_validator()
     {
         _validator = nullptr;
         return *this;
     }
 
-    // Set the maximum number of retries for both component-level and
-    // entity-level validation (default 10).
+    /// @brief Set the maximum number of retries for validation (default 10).
+    ///
+    /// Applies to both component-level and entity-level validation.
+    /// @param retries The maximum retry count.
+    /// @return `*this` for chaining.
     eg& max_retries(std::size_t retries)
     {
         _max_retries = retries;
         return *this;
     }
 
-    // --- Observers --------------------------------------------------------
+    /// @}
+    /// @name Observers
+    /// @{
 
-    // Add an observer to receive generation lifecycle callbacks.
+    /// @brief Add an observer to receive generation lifecycle callbacks.
+    /// @param obs The observer (shared ownership).
+    /// @return `*this` for chaining.
+    /// @see generation_observer
     eg& add_observer(std::shared_ptr<generation_observer> obs)
     {
         _observers.push_back(std::move(obs));
         return *this;
     }
 
-    // Remove a specific observer by identity.
+    /// @brief Remove a specific observer by identity.
+    /// @param obs The observer to remove.
+    /// @return `*this` for chaining.
     eg& remove_observer(const std::shared_ptr<generation_observer>& obs)
     {
         std::erase(_observers, obs);
         return *this;
     }
 
-    // Remove all observers.
+    /// @brief Remove all observers.
+    /// @return `*this` for chaining.
     eg& clear_observers()
     {
         _observers.clear();
         return *this;
     }
 
-    // --- Generation ------------------------------------------------------
+    /// @}
+    /// @name Generation
+    /// @{
 
-    // Generate an entity with all registered components using the
-    // generator's internal engine.
+    /// @brief Generate an entity with all registered components.
+    ///
+    /// Uses the generator's internal engine.
+    /// @return The generated entity.
+    /// @throws std::runtime_error If component or entity validation is exhausted.
     [[nodiscard]] entity generate()
     {
         auto refs = all_component_refs();
@@ -719,8 +924,10 @@ class eg
         });
     }
 
-    // Generate an entity with all registered components using a specific
-    // seed for reproducible results.
+    /// @brief Generate an entity with all registered components using a seed.
+    /// @param call_seed Seed for reproducible results.
+    /// @return The generated entity.
+    /// @throws std::runtime_error If validation is exhausted.
     [[nodiscard]] entity generate(std::uint64_t call_seed) const
     {
         auto refs = all_component_refs();
@@ -730,11 +937,12 @@ class eg
         });
     }
 
-    // Generate an entity with only the specified components using the
-    // generator's internal engine. Components with keys not found in the
-    // registry are silently skipped. Note: components that depend on other
-    // components via context will only see values from components that are
-    // both registered before them and included in the requested keys.
+    /// @brief Generate an entity with only the specified components.
+    ///
+    /// Uses the generator's internal engine. Unknown keys are silently skipped.
+    /// @param component_keys The keys to include.
+    /// @return The generated entity.
+    /// @throws std::runtime_error If validation is exhausted.
     [[nodiscard]] entity generate(std::span<const std::wstring> component_keys)
     {
         auto filtered = filter_components(component_keys);
@@ -743,11 +951,11 @@ class eg
         });
     }
 
-    // Generate an entity with only the specified components using a specific
-    // seed. Components with keys not found in the registry are silently
-    // skipped. Note: components that depend on other components via context
-    // will only see values from components that are both registered before
-    // them and included in the requested keys.
+    /// @brief Generate an entity with only the specified components using a seed.
+    /// @param component_keys The keys to include.
+    /// @param call_seed Seed for reproducible results.
+    /// @return The generated entity.
+    /// @throws std::runtime_error If validation is exhausted.
     [[nodiscard]] entity generate(std::span<const std::wstring> component_keys,
                                   std::uint64_t call_seed) const
     {
@@ -758,7 +966,7 @@ class eg
         });
     }
 
-    // Overload accepting an initializer list for convenience.
+    /// @brief Generate with an initializer list of keys (convenience overload).
     [[nodiscard]] entity generate(
         std::initializer_list<std::wstring> component_keys)
     {
@@ -766,7 +974,7 @@ class eg
             component_keys.begin(), component_keys.size()});
     }
 
-    // Overload accepting an initializer list with seed for convenience.
+    /// @brief Generate with an initializer list of keys and a seed.
     [[nodiscard]] entity generate(
         std::initializer_list<std::wstring> component_keys,
         std::uint64_t call_seed) const
@@ -775,9 +983,13 @@ class eg
             component_keys.begin(), component_keys.size()}, call_seed);
     }
 
-    // --- Batch generation ------------------------------------------------
+    /// @}
+    /// @name Batch Generation
+    /// @{
 
-    // Generate multiple entities with all registered components.
+    /// @brief Generate multiple entities with all registered components.
+    /// @param count Number of entities to generate.
+    /// @return A vector of generated entities.
     [[nodiscard]] std::vector<entity> generate_batch(std::size_t count)
     {
         std::vector<entity> entities;
@@ -794,9 +1006,13 @@ class eg
         return entities;
     }
 
-    // Generate multiple entities with all registered components using a
-    // specific seed. The seed initializes the engine once; successive
-    // entities draw from the same deterministic sequence.
+    /// @brief Generate multiple entities using a seed.
+    ///
+    /// The seed initializes the engine once; successive entities draw from
+    /// the same deterministic sequence.
+    /// @param count Number of entities to generate.
+    /// @param call_seed Seed for reproducible results.
+    /// @return A vector of generated entities.
     [[nodiscard]] std::vector<entity> generate_batch(
         std::size_t count, std::uint64_t call_seed) const
     {
@@ -815,13 +1031,18 @@ class eg
         return entities;
     }
 
-    // --- Concurrent batch generation -------------------------------------
+    /// @}
+    /// @name Concurrent Batch Generation
+    /// @{
 
-    // Generate multiple entities concurrently with all registered components.
-    // Entity seeds are pre-derived sequentially from the engine, then each
-    // entity is generated in its own async task. Results are returned in
-    // seed order. If an observer is set, the caller is responsible for its
-    // thread safety.
+    /// @brief Generate multiple entities concurrently.
+    ///
+    /// Entity seeds are pre-derived sequentially from the engine, then each
+    /// entity is generated in its own async task. Results are returned in
+    /// seed order. If observers are set, the caller is responsible for their
+    /// thread safety.
+    /// @param count Number of entities to generate.
+    /// @return A vector of generated entities.
     [[nodiscard]] std::vector<entity> generate_batch_async(std::size_t count)
     {
         auto refs = all_component_refs();
@@ -853,9 +1074,13 @@ class eg
         return entities;
     }
 
-    // Generate multiple entities concurrently using a specific seed for
-    // reproducible results. The seed initializes a dedicated engine for
-    // pre-deriving per-entity seeds; all subsequent generation is parallel.
+    /// @brief Generate multiple entities concurrently using a seed.
+    ///
+    /// The seed initializes a dedicated engine for pre-deriving per-entity
+    /// seeds; all subsequent generation is parallel.
+    /// @param count Number of entities to generate.
+    /// @param call_seed Seed for reproducible results.
+    /// @return A vector of generated entities.
     [[nodiscard]] std::vector<entity> generate_batch_async(
         std::size_t count, std::uint64_t call_seed) const
     {
@@ -890,9 +1115,14 @@ class eg
         return entities;
     }
 
-    // --- Component groups ------------------------------------------------
+    /// @}
+    /// @name Component Groups
+    /// @{
 
-    // Register a named group of component keys for convenient generation.
+    /// @brief Register a named group of component keys.
+    /// @param group_name Name for the group.
+    /// @param component_keys Keys in the group.
+    /// @return `*this` for chaining.
     eg& add_group(const std::wstring& group_name,
                   std::vector<std::wstring> component_keys)
     {
@@ -900,20 +1130,27 @@ class eg
         return *this;
     }
 
-    // Remove a named group.
+    /// @brief Remove a named group.
+    /// @param group_name The group to remove.
+    /// @return `*this` for chaining.
     eg& remove_group(const std::wstring& group_name)
     {
         _groups.erase(group_name);
         return *this;
     }
 
-    // Check if a named group exists.
+    /// @brief Check if a named group exists.
+    /// @param group_name The group name to look up.
+    /// @return `true` if the group exists.
     [[nodiscard]] bool has_group(const std::wstring& group_name) const
     {
         return _groups.contains(group_name);
     }
 
-    // Generate an entity using a named group of components.
+    /// @brief Generate an entity using a named group.
+    /// @param group_name The group to generate.
+    /// @return The generated entity.
+    /// @throws std::out_of_range If the group does not exist.
     [[nodiscard]] entity generate_group(const std::wstring& group_name)
     {
         auto it = _groups.find(group_name);
@@ -928,7 +1165,11 @@ class eg
         });
     }
 
-    // Generate an entity using a named group with a specific seed.
+    /// @brief Generate an entity using a named group with a seed.
+    /// @param group_name The group to generate.
+    /// @param call_seed Seed for reproducible results.
+    /// @return The generated entity.
+    /// @throws std::out_of_range If the group does not exist.
     [[nodiscard]] entity generate_group(const std::wstring& group_name,
                                         std::uint64_t call_seed) const
     {
@@ -944,6 +1185,8 @@ class eg
             return generate_impl(filtered, engine, _max_retries, _observers);
         });
     }
+
+    /// @}
 
   private:
     // Component entry: key + owned component pointer.

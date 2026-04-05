@@ -10,27 +10,42 @@
 namespace dasmig::ext
 {
 
-// Adapter that bridges entity-generator with Flecs. Users register mappings
-// from generator component keys to Flecs component types, then spawn()
-// converts generated entities into Flecs entities with typed components.
-//
-// Usage:
-//   flecs::world world;
-//   dasmig::ext::flecs_adapter adapter(world);
-//   adapter.map<Position>(L"pos", [](const dasmig::entity& e) {
-//       return Position{ e.get<float>(L"x"), e.get<float>(L"y") };
-//   });
-//   auto flecs_entity = adapter.spawn(gen.generate());
+/// @file flecs_adapter.hpp
+/// @brief Adapter bridging entity-generator with Flecs.
+
+/// @brief Adapter that bridges entity-generator with Flecs.
+///
+/// Users register mappings from generator component keys to Flecs component
+/// types, then spawn() converts generated entities into Flecs entities with
+/// typed components.
+///
+/// @par Example
+/// @code
+///   flecs::world world;
+///   dasmig::ext::flecs_adapter adapter(world);
+///   adapter.map<Position>(L"pos", [](const dasmig::entity& e) {
+///       return Position{ e.get<float>(L"x"), e.get<float>(L"y") };
+///   });
+///   auto flecs_entity = adapter.spawn(gen.generate());
+/// @endcode
+/// @see entt_adapter
 class flecs_adapter
 {
   public:
+    /// @brief Construct an adapter bound to a Flecs world.
+    /// @param world The Flecs world to create entities in.
     explicit flecs_adapter(flecs::world& world)
         : _world{world} {}
 
-    // Register a mapping from a generator key to a Flecs component type.
-    // The mapper receives the full generated entity so it can read any
-    // combination of keys. The component is only set when the specified
-    // key is present in the generated entity.
+    /// @brief Register a transform mapping from a generator key to a Flecs component.
+    ///
+    /// The mapper receives the full generated entity so it can read any
+    /// combination of keys. The component is only set when the specified
+    /// key is present in the generated entity.
+    /// @tparam Component The Flecs component type.
+    /// @param key Generator component key to watch for.
+    /// @param mapper Transform function producing the Flecs component.
+    /// @return `*this` for chaining.
     template <typename Component>
     flecs_adapter& map(const std::wstring& key,
                        std::function<Component(const entity&)> mapper)
@@ -43,8 +58,10 @@ class flecs_adapter
         return *this;
     }
 
-    // Register a direct mapping for keys whose generated value type
-    // matches the Flecs component type exactly. No transform needed.
+    /// @brief Register a direct mapping (value type matches Flecs component type).
+    /// @tparam Component The Flecs component type.
+    /// @param key Generator component key whose value type is @p Component.
+    /// @return `*this` for chaining.
     template <typename Component>
     flecs_adapter& map(const std::wstring& key)
     {
@@ -55,8 +72,11 @@ class flecs_adapter
         return *this;
     }
 
-    // Create a Flecs entity from a generated entity, setting all
-    // mapped components whose keys are present. Returns the Flecs entity.
+    /// @brief Create a Flecs entity from a generated entity.
+    ///
+    /// Sets all mapped components whose keys are present.
+    /// @param src The generated entity.
+    /// @return The new Flecs entity.
     [[nodiscard]] flecs::entity spawn(const entity& src)
     {
         auto target = _world.entity();
@@ -64,14 +84,17 @@ class flecs_adapter
         return target;
     }
 
-    // Create a Flecs entity from a generated entity onto an existing
-    // Flecs entity (useful for prefab instances or pre-created entities).
+    /// @brief Set mapped components onto an existing Flecs entity.
+    /// @param target The pre-existing Flecs entity.
+    /// @param src The generated entity.
     void spawn_into(flecs::entity target, const entity& src)
     {
         apply(target, src);
     }
 
-    // Create Flecs entities for a batch of generated entities.
+    /// @brief Create Flecs entities for a batch of generated entities.
+    /// @param sources A vector of generated entities.
+    /// @return A vector of new Flecs entities.
     [[nodiscard]] std::vector<flecs::entity> spawn_batch(
         const std::vector<entity>& sources)
     {
@@ -84,7 +107,8 @@ class flecs_adapter
         return result;
     }
 
-    // Remove all registered mappings.
+    /// @brief Remove all registered mappings.
+    /// @return `*this` for chaining.
     flecs_adapter& clear_mappings()
     {
         _mappings.clear();

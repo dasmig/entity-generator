@@ -1,0 +1,66 @@
+# Doxyfile for Entity Generator
+# Run: doxygen Doxyfile
+
+PROJECT_NAME           = "Entity Generator"
+PROJECT_NUMBER         = 1.1.0
+PROJECT_BRIEF          = "Composable, deterministic entity generation for C++23"
+PROJECT_LOGO           =
+
+OUTPUT_DIRECTORY       = doc/api
+CREATE_SUBDIRS         = NO
+
+# --- Input ----------------------------------------------------------------
+
+INPUT                  = dasmig/ doc/usage.md README.md
+FILE_PATTERNS          = *.hpp
+RECURSIVE              = YES
+USE_MDFILE_AS_MAINPAGE = README.md
+
+# --- Extraction -----------------------------------------------------------
+
+EXTRACT_ALL            = NO
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = YES
+
+# --- Source browsing -------------------------------------------------------
+
+SOURCE_BROWSER         = YES
+INLINE_SOURCES         = NO
+STRIP_CODE_COMMENTS    = NO
+
+# --- Build ----------------------------------------------------------------
+
+BUILTIN_STL_SUPPORT    = YES
+ENABLE_PREPROCESSING   = YES
+MACRO_EXPANSION        = YES
+PREDEFINED             = DASMIG_ENTITYGEN_HPP \
+                         DASMIG_EXT_STATS_OBSERVER_HPP \
+                         DASMIG_EXT_ENTT_ADAPTER_HPP \
+                         DASMIG_EXT_FLECS_ADAPTER_HPP
+
+# Exclude deps/ (vendored third-party headers).
+EXCLUDE_PATTERNS       = */deps/*
+
+# --- Warnings -------------------------------------------------------------
+
+WARN_IF_UNDOCUMENTED   = YES
+WARN_IF_DOC_ERROR      = YES
+
+# --- Output formats --------------------------------------------------------
+
+GENERATE_HTML          = YES
+HTML_OUTPUT            = html
+HTML_EXTRA_STYLESHEET  = doc/doxygen-awesome-css/doxygen-awesome.css
+HTML_COLORSTYLE        = LIGHT
+GENERATE_TREEVIEW      = YES
+DISABLE_INDEX          = NO
+FULL_SIDEBAR           = NO
+
+GENERATE_LATEX         = NO
+GENERATE_MAN           = NO
+GENERATE_XML           = NO
+
+# --- Graphs ----------------------------------------------------------------
+
+HAVE_DOT               = NO
+CLASS_DIAGRAMS         = YES

@@ -13,81 +13,85 @@
 namespace dasmig::ext
 {
 
-// Observer that collects comprehensive generation statistics. All fields
-// are public for direct access. Use reset() to zero everything.
+/// @file stats_observer.hpp
+/// @brief Observer that collects comprehensive generation statistics.
+
+/// @brief Observer that collects comprehensive generation statistics.
+///
+/// All fields are public for direct access. Use reset() to zero everything
+/// and report() to produce a formatted summary.
+/// @see generation_observer, eg::add_observer()
 class stats_observer : public generation_observer
 {
   public:
-    using clock = std::chrono::steady_clock;
-    using duration = std::chrono::steady_clock::duration;
+    using clock = std::chrono::steady_clock;      ///< Clock type used for timing.
+    using duration = std::chrono::steady_clock::duration; ///< Duration type.
 
-    // --- Entity counters --------------------------------------------------
+    /// @name Entity Counters
+    /// @{
+    std::size_t entities_generated{0};  ///< Total entities successfully generated.
+    std::size_t entity_retries{0};      ///< Total entity-level validation retries.
+    std::size_t entity_failures{0};     ///< Total entity-level validation failures.
+    /// @}
 
-    std::size_t entities_generated{0};
-    std::size_t entity_retries{0};
-    std::size_t entity_failures{0};
+    /// @name Entity Timing
+    /// @{
+    duration total_generation_time{duration::zero()}; ///< Wall-clock time summed across all entities.
+    duration min_entity_time{duration::max()};        ///< Fastest entity generation.
+    duration max_entity_time{duration::zero()};       ///< Slowest entity generation.
+    /// @}
 
-    // --- Entity timing ----------------------------------------------------
+    /// @name Component Counters
+    /// @{
+    std::size_t components_generated{0}; ///< Total components successfully generated.
+    std::size_t components_skipped{0};   ///< Total components skipped (weight or conditional).
+    std::size_t component_failures{0};   ///< Total component validation failures.
+    /// @}
 
-    // Wall-clock time summed across all entities generated.
-    duration total_generation_time{duration::zero()};
-    duration min_entity_time{duration::max()};
-    duration max_entity_time{duration::zero()};
+    /// @name Per-Component-Key Counters
+    /// @{
+    std::map<std::wstring, std::size_t> component_retries;       ///< Total retries per key.
+    std::map<std::wstring, std::size_t> component_counts;        ///< Successful generations per key.
+    std::map<std::wstring, std::size_t> component_skip_counts;   ///< Skips per key.
+    std::map<std::wstring, std::size_t> component_failure_counts;///< Failures per key.
+    /// @}
 
-    // --- Component counters -----------------------------------------------
+    /// @name Per-Component-Key Timing
+    /// @{
+    std::map<std::wstring, duration> component_times;     ///< Total generation time per key.
+    std::map<std::wstring, duration> component_min_times; ///< Fastest per key.
+    std::map<std::wstring, duration> component_max_times; ///< Slowest per key.
+    /// @}
 
-    std::size_t components_generated{0};
-    std::size_t components_skipped{0};
-    std::size_t component_failures{0};
-
-    // --- Per-component-key counters ---------------------------------------
-
-    // Total retries per component key.
-    std::map<std::wstring, std::size_t> component_retries;
-
-    // Times each key was generated successfully.
-    std::map<std::wstring, std::size_t> component_counts;
-
-    // Times each key was skipped (weight or conditional).
-    std::map<std::wstring, std::size_t> component_skip_counts;
-
-    // Times each key's validation was exhausted.
-    std::map<std::wstring, std::size_t> component_failure_counts;
-
-    // --- Per-component-key timing -----------------------------------------
-
-    // Total generation time per component key (including retries).
-    std::map<std::wstring, duration> component_times;
-
-    // Fastest / slowest per component key.
-    std::map<std::wstring, duration> component_min_times;
-    std::map<std::wstring, duration> component_max_times;
-
-    // --- Components-per-entity tracking -----------------------------------
-
+    /// @name Components-per-Entity Tracking
+    /// @{
     std::size_t min_components_per_entity{
-        std::numeric_limits<std::size_t>::max()};
-    std::size_t max_components_per_entity{0};
-    // total_components_in_entities / entities_generated = average
-    std::size_t total_components_in_entities{0};
+        std::numeric_limits<std::size_t>::max()}; ///< Fewest components in any entity.
+    std::size_t max_components_per_entity{0};     ///< Most components in any entity.
+    std::size_t total_components_in_entities{0};  ///< Sum for computing the average.
+    /// @}
 
-    // --- Value distribution -----------------------------------------------
-
-    // Per-component key, counts how many times each display string appeared.
-    // Useful for analysing uniformity of random components.
+    /// @name Value Distribution
+    /// @{
+    /// Per-component key, counts how many times each display string appeared.
+    /// Useful for analysing uniformity of random components.
     std::map<std::wstring,
              std::map<std::wstring, std::size_t>> value_distribution;
+    /// @}
 
-    // --- Computed helpers --------------------------------------------------
+    /// @name Computed Helpers
+    /// @{
 
-    // Average generation time per entity (zero if none generated).
+    /// @brief Average generation time per entity (zero if none generated).
     [[nodiscard]] duration avg_entity_time() const
     {
         if (entities_generated == 0) return duration::zero();
         return total_generation_time / entities_generated;
     }
 
-    // Average generation time per component key.
+    /// @brief Average generation time per component key.
+    /// @param key The component key.
+    /// @return Average duration, or zero if no data for the key.
     [[nodiscard]] duration avg_component_time(const std::wstring& key) const
     {
         auto it = component_times.find(key);
@@ -98,7 +102,7 @@ class stats_observer : public generation_observer
         return it->second / ct->second;
     }
 
-    // Average components produced per entity (0.0 if none generated).
+    /// @brief Average components produced per entity (0.0 if none generated).
     [[nodiscard]] double avg_components_per_entity() const
     {
         if (entities_generated == 0) return 0.0;
@@ -106,7 +110,7 @@ class stats_observer : public generation_observer
              / static_cast<double>(entities_generated);
     }
 
-    // Retry rate: total retries / total component generations (0.0 if none).
+    /// @brief Retry rate: total retries / total component generations.
     [[nodiscard]] double component_retry_rate() const
     {
         if (components_generated == 0) return 0.0;
@@ -116,7 +120,7 @@ class stats_observer : public generation_observer
              / static_cast<double>(components_generated);
     }
 
-    // Entity retry rate: entity retries / entities generated (0.0 if none).
+    /// @brief Entity retry rate: entity retries / entities generated.
     [[nodiscard]] double entity_retry_rate() const
     {
         if (entities_generated == 0) return 0.0;
@@ -124,9 +128,12 @@ class stats_observer : public generation_observer
              / static_cast<double>(entities_generated);
     }
 
-    // --- Report -----------------------------------------------------------
+    /// @}
+    /// @name Report
+    /// @{
 
-    // Produce a human-readable wide-string report of all collected stats.
+    /// @brief Produce a human-readable wide-string report of all collected stats.
+    /// @return A multi-line formatted report string.
     [[nodiscard]] std::wstring report() const
     {
         std::wostringstream o;
@@ -272,8 +279,11 @@ class stats_observer : public generation_observer
         return o.str();
     }
 
-    // --- Reset ------------------------------------------------------------
+    /// @}
+    /// @name Reset
+    /// @{
 
+    /// @brief Zero all counters, timers, and distributions.
     void reset()
     {
         entities_generated = 0;
@@ -304,7 +314,9 @@ class stats_observer : public generation_observer
         value_distribution.clear();
     }
 
-    // --- Hook overrides ---------------------------------------------------
+    /// @}
+    /// @name Hook Overrides
+    /// @{
 
     void on_before_generate() override
     {
@@ -429,7 +441,7 @@ class stats_observer : public generation_observer
     }
 };
 
-// Stream operator for one-liner report output.
+/// @brief Stream operator for one-liner report output.
 inline std::wostream& operator<<(std::wostream& os,
                                   const stats_observer& stats)
 {

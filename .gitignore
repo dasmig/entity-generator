@@ -11,6 +11,9 @@ coverage/
 *.profraw
 *.profdata
 
+# Doxygen output
+doc/api/
+
 # IDE / editor
 .vscode/
 

@@ -63,3 +63,29 @@ jobs:
 
       - name: Lint
         run: make lint
+
+      - name: Build documentation
+        run: |
+          sudo apt-get install -y doxygen
+          make docs
+
+      - name: Upload documentation
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: doc/api/html
+
+  deploy-docs:
+    needs: build-and-test
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4

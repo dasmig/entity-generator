@@ -1,6 +1,6 @@
 # Usage Guide
 
-This guide covers every feature of the entity-generator library in detail. For a quick overview, see the [README](../README.md).
+This guide covers every feature of the entity-generator library in detail. For a quick overview, see the [README](../README.md). For the full API reference, run `doxygen Doxyfile` from the repository root and open `doc/api/html/index.html`.
 
 ## Table of Contents
 
@@ -27,6 +27,7 @@ This guide covers every feature of the entity-generator library in detail. For a
 - [Extensions](#extensions)
 - [ECS Integration: EnTT](#ecs-integration-entt)
 - [ECS Integration: Flecs](#ecs-integration-flecs)
+- [Error Reference](#error-reference)
 
 ## Defining Components
 
@@ -643,6 +644,9 @@ std::size_t n = gen.size(); // 2
 // All registered keys in registration order.
 auto keys = gen.component_keys(); // {"age", "class"}
 
+// Check if a specific component is registered.
+bool has_age = gen.has(L"age"); // true
+
 // Remove everything (components, weight overrides, groups).
 gen.clear();
 ```
@@ -693,6 +697,12 @@ for (const auto& [key, dist] : stats->value_distribution)
         std::wcout << key << L"=" << val << L": " << count << L'\n';
 
 stats->reset(); // zeroes all counters
+
+// Generate a full formatted report.
+std::wcout << stats->report();
+
+// Or use the stream operator (equivalent).
+std::wcout << *stats;
 ```
 
 **Entity counters:**
@@ -864,3 +874,19 @@ adapter.spawn_into(prefab, gen.generate());
 | `spawn_into(target, entity)` | Apply mapped components to existing entity |
 | `spawn_batch(vector)` | Spawn multiple entities at once |
 | `clear_mappings()` | Remove all registered mappings |
+
+## Error Reference
+
+The library throws standard exceptions. No custom exception types are used.
+
+| Exception | Thrown by | Condition |
+|---|---|---|
+| `std::out_of_range` | `entity::get<T>(key)`, `entity::get_any(key)` | Key not present in the entity |
+| `std::out_of_range` | `entity::seed(key)` | Component key not found |
+| `std::out_of_range` | `eg::weight(key, value)` | Component not registered |
+| `std::out_of_range` | `eg::generate_group(name)` | Group not found |
+| `std::runtime_error` | `eg::generate()` (all overloads) | Component validation exhausted after `max_retries` |
+| `std::runtime_error` | `eg::generate()` (all overloads) | Entity validation exhausted after `max_retries` |
+| `std::invalid_argument` | `choice_component` constructor | Empty choices vector |
+| `std::invalid_argument` | `weighted_choice_component` constructor | Empty options vector or all weights are zero |
+| `std::bad_any_cast` | `entity::get<T>(key)`, `generation_context::get<T>(key)` | Type mismatch on the stored value |

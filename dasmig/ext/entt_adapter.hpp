@@ -10,27 +10,42 @@
 namespace dasmig::ext
 {
 
-// Adapter that bridges entity-generator with EnTT. Users register mappings
-// from generator component keys to EnTT component types, then spawn()
-// converts generated entities into EnTT entities with typed components.
-//
-// Usage:
-//   entt::registry registry;
-//   dasmig::ext::entt_adapter adapter(registry);
-//   adapter.map<Position>(L"pos", [](const dasmig::entity& e) {
-//       return Position{ e.get<float>(L"x"), e.get<float>(L"y") };
-//   });
-//   auto entt_entity = adapter.spawn(gen.generate());
+/// @file entt_adapter.hpp
+/// @brief Adapter bridging entity-generator with EnTT.
+
+/// @brief Adapter that bridges entity-generator with EnTT.
+///
+/// Users register mappings from generator component keys to EnTT component
+/// types, then spawn() converts generated entities into EnTT entities with
+/// typed components.
+///
+/// @par Example
+/// @code
+///   entt::registry registry;
+///   dasmig::ext::entt_adapter adapter(registry);
+///   adapter.map<Position>(L"pos", [](const dasmig::entity& e) {
+///       return Position{ e.get<float>(L"x"), e.get<float>(L"y") };
+///   });
+///   auto entt_entity = adapter.spawn(gen.generate());
+/// @endcode
+/// @see flecs_adapter
 class entt_adapter
 {
   public:
+    /// @brief Construct an adapter bound to an EnTT registry.
+    /// @param registry The EnTT registry to create entities in.
     explicit entt_adapter(entt::registry& registry)
         : _registry{registry} {}
 
-    // Register a mapping from a generator key to an EnTT component type.
-    // The mapper receives the full generated entity so it can read any
-    // combination of keys. The component is only emplaced when the
-    // specified key is present in the generated entity.
+    /// @brief Register a transform mapping from a generator key to an EnTT component.
+    ///
+    /// The mapper receives the full generated entity so it can read any
+    /// combination of keys. The component is only emplaced when the
+    /// specified key is present in the generated entity.
+    /// @tparam Component The EnTT component type to emplace.
+    /// @param key Generator component key to watch for.
+    /// @param mapper Transform function producing the EnTT component.
+    /// @return `*this` for chaining.
     template <typename Component>
     entt_adapter& map(const std::wstring& key,
                       std::function<Component(const entity&)> mapper)
@@ -44,8 +59,10 @@ class entt_adapter
         return *this;
     }
 
-    // Register a direct mapping for keys whose generated value type
-    // matches the EnTT component type exactly. No transform needed.
+    /// @brief Register a direct mapping (value type matches EnTT component type).
+    /// @tparam Component The EnTT component type.
+    /// @param key Generator component key whose value type is @p Component.
+    /// @return `*this` for chaining.
     template <typename Component>
     entt_adapter& map(const std::wstring& key)
     {
@@ -58,8 +75,11 @@ class entt_adapter
         return *this;
     }
 
-    // Create an EnTT entity from a generated entity, emplacing all
-    // mapped components whose keys are present. Returns the EnTT entity.
+    /// @brief Create an EnTT entity from a generated entity.
+    ///
+    /// Emplaces all mapped components whose keys are present.
+    /// @param src The generated entity.
+    /// @return The new EnTT entity.
     [[nodiscard]] entt::entity spawn(const entity& src)
     {
         auto target = _registry.create();
@@ -67,14 +87,17 @@ class entt_adapter
         return target;
     }
 
-    // Create an EnTT entity from a generated entity onto an existing
-    // EnTT entity (useful for pre-created entities or prefabs).
+    /// @brief Emplace mapped components onto an existing EnTT entity.
+    /// @param target The pre-existing EnTT entity.
+    /// @param src The generated entity.
     void spawn_into(entt::entity target, const entity& src)
     {
         apply(target, src);
     }
 
-    // Create EnTT entities for a batch of generated entities.
+    /// @brief Create EnTT entities for a batch of generated entities.
+    /// @param sources A vector of generated entities.
+    /// @return A vector of new EnTT entities.
     [[nodiscard]] std::vector<entt::entity> spawn_batch(
         const std::vector<entity>& sources)
     {
@@ -87,7 +110,8 @@ class entt_adapter
         return result;
     }
 
-    // Remove all registered mappings.
+    /// @brief Remove all registered mappings.
+    /// @return `*this` for chaining.
     entt_adapter& clear_mappings()
     {
         _mappings.clear();
