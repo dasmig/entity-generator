@@ -4,7 +4,7 @@
 
 [![Entity Generator for C++](https://raw.githubusercontent.com/dasmig/entity-generator/master/doc/entity-generator.png)](https://github.com/dasmig/entity-generator/releases)
 
-[![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/dasmig/entity-generator/main/LICENSE)
+[![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/dasmig/entity-generator/main/LICENSE.MIT)
 [![CI](https://github.com/dasmig/entity-generator/actions/workflows/ci.yml/badge.svg)](https://github.com/dasmig/entity-generator/actions/workflows/ci.yml)
 [![GitHub Releases](https://img.shields.io/github/release/dasmig/entity-generator.svg)](https://github.com/dasmig/entity-generator/releases)
 [![GitHub Issues](https://img.shields.io/github/issues/dasmig/entity-generator.svg)](https://github.com/dasmig/entity-generator/issues)
@@ -115,3 +115,14 @@ auto seeded = eg::instance().generate(42);
 For the complete feature guide — component dependencies, custom types, seed signatures, batch generation, groups, weights, validation, event hooks, extensions, and more — see the **[Usage Guide](doc/usage.md)**.
 
 For planned features — Python/Node.js/.NET wrappers and more — see the **[Roadmap](https://github.com/dasmig/entity-generator/blob/main/doc/roadmap.md)**.
+
+## Related Libraries
+
+| Library | Description |
+|---------|-------------|
+| [name-generator](https://github.com/dasmig/name-generator) | Culturally appropriate full names |
+| [nickname-generator](https://github.com/dasmig/nickname-generator) | Gamer-style nicknames |
+| [birth-generator](https://github.com/dasmig/birth-generator) | Demographically plausible birthdays |
+| [biodata-generator](https://github.com/dasmig/biodata-generator) | Procedural human physical characteristics |
+| [city-generator](https://github.com/dasmig/city-generator) | Weighted city selection by population |
+| [country-generator](https://github.com/dasmig/country-generator) | Weighted country selection by population |

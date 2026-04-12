@@ -2,9 +2,9 @@
 # Run: doxygen Doxyfile
 
 PROJECT_NAME           = "Entity Generator"
-PROJECT_NUMBER         = 1.1.0
+PROJECT_NUMBER         = 1.1.1
 PROJECT_BRIEF          = "Composable, deterministic entity generation for C++23"
-PROJECT_LOGO           =
+PROJECT_LOGO           = doc/entity-generator.png
 
 OUTPUT_DIRECTORY       = doc/api
 CREATE_SUBDIRS         = NO
