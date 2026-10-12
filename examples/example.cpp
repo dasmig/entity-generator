@@ -17,7 +17,7 @@ class character_class : public dasmig::component
         static const std::vector<std::wstring> classes{
             L"Warrior", L"Mage", L"Rogue", L"Healer", L"Ranger", L"Paladin"};
 
-        return ctx.random().get(classes);
+        return dasmig::core::pick(ctx.random(), classes);
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -38,7 +38,7 @@ class age : public dasmig::component
     [[nodiscard]] std::any generate(
         const dasmig::generation_context& ctx) const override
     {
-        return ctx.random().get(18, 65);
+        return dasmig::core::uniform_int(ctx.random(), 18, 65);
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -59,7 +59,7 @@ class level : public dasmig::component
     [[nodiscard]] std::any generate(
         const dasmig::generation_context& ctx) const override
     {
-        return ctx.random().get(1, 100);
+        return dasmig::core::uniform_int(ctx.random(), 1, 100);
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -86,7 +86,7 @@ class character_name : public dasmig::component
             L"Kaelen",  L"Lyria",   L"Magnus",  L"Nadia",   L"Orion",
             L"Petra",   L"Quinlan", L"Rosalind"};
 
-        return ctx.random().get(names);
+        return dasmig::core::pick(ctx.random(), names);
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -147,9 +147,9 @@ class character_stats : public dasmig::component
         const int max_stat = ctx.has(L"level") ? ctx.get<int>(L"level") / 5 + 3 : 20;
 
         return stats{
-            .strength  = ctx.random().get(1, max_stat),
-            .agility   = ctx.random().get(1, max_stat),
-            .intellect = ctx.random().get(1, max_stat)};
+            .strength  = dasmig::core::uniform_int(ctx.random(), 1, max_stat),
+            .agility   = dasmig::core::uniform_int(ctx.random(), 1, max_stat),
+            .intellect = dasmig::core::uniform_int(ctx.random(), 1, max_stat)};
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -225,6 +225,11 @@ int main()
     std::wcout << L"\n--- Entity to_string ---\n";
     std::wcout << dasmig::eg::instance().generate().to_string() << L'\n';
 
+    // Entity to_json(): typed values and the seed, as UTF-8 (widened here
+    // because this example prints with std::wcout).
+    std::wcout << L"\n--- Entity to_json ---\n";
+    std::wcout << dasmig::core::from_utf8(dasmig::eg::instance().generate(42).to_json()) << L'\n';
+
     // Batch generation.
     std::wcout << L"\n--- Batch generation (3 entities) ---\n";
     auto batch = dasmig::eg::instance().generate_batch(3);
@@ -266,7 +271,7 @@ int main()
     std::wcout << L"\n--- Observer hooks ---\n";
     dasmig::eg::instance().add_observer(
         std::make_shared<log_observer>());
-    dasmig::eg::instance().generate({L"name", L"class"});
+    (void)dasmig::eg::instance().generate({L"name", L"class"});
     dasmig::eg::instance().clear_observers();
 
     // Conditional component: only generates when "class" is "Warrior".
@@ -280,7 +285,7 @@ int main()
         {
             static const std::vector<std::wstring> titles{
                 L"Warlord", L"Champion", L"Berserker"};
-            return ctx.random().get(titles);
+            return dasmig::core::pick(ctx.random(), titles);
         }
 
         [[nodiscard]] bool should_generate(
@@ -380,7 +385,7 @@ int main()
     // Generation statistics observer.
     auto stats = std::make_shared<dasmig::ext::stats_observer>();
     dasmig::eg::instance().add_observer(stats);
-    dasmig::eg::instance().generate_batch(10);
+    (void)dasmig::eg::instance().generate_batch(10);
     std::wcout << L'\n' << stats->report();
     dasmig::eg::instance().remove_observer(stats);
     // Component-level validation with retries.
@@ -391,7 +396,7 @@ int main()
           public:
             std::wstring key() const override { return L"even"; }
             std::any generate(const dasmig::generation_context& ctx) const override
-            { return ctx.random().get(1, 100); }
+            { return dasmig::core::uniform_int(ctx.random(), 1, 100); }
             bool validate(const std::any& v) const override
             { return std::any_cast<int>(v) % 2 == 0; }
             std::wstring to_string(const std::any& v) const override
@@ -422,7 +427,7 @@ int main()
         auto log = std::make_shared<dasmig::ext::stats_observer>();
         dasmig::eg::instance().add_observer(stats2);
         dasmig::eg::instance().add_observer(log);
-        dasmig::eg::instance().generate();
+        (void)dasmig::eg::instance().generate();
         std::wcout << L"Stats entities: " << stats2->entities_generated
                    << L", Log entities: " << log->entities_generated << L'\n';
         dasmig::eg::instance().clear_observers();
@@ -454,7 +459,7 @@ int main()
     {
         dasmig::eg gen;
         auto e = gen.generate();
-        e.get<int>(L"nonexistent"); // throws
+        (void)e.get<int>(L"nonexistent"); // throws
     }
     catch (const std::out_of_range& ex)
     {

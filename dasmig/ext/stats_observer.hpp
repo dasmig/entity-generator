@@ -136,7 +136,8 @@ class stats_observer : public generation_observer
 
     /// @brief Produce a human-readable wide-string report of all collected stats.
     /// @return A multi-line formatted report string.
-    [[nodiscard]] std::wstring report() const
+    // One straight-line report; splitting it would only scatter the format.
+    [[nodiscard]] std::wstring report() const // NOLINT(readability-function-cognitive-complexity)
     {
         std::wostringstream o;
         o << std::fixed << std::setprecision(2);
@@ -268,7 +269,7 @@ class stats_observer : public generation_observer
                 auto total_n = count_for(key);
                 for (const auto& [val, n] : sorted)
                 {
-                    double pct = total_n > 0
+                    const double pct = total_n > 0
                         ? static_cast<double>(n)
                           / static_cast<double>(total_n) * 100.0
                         : 0.0;
@@ -332,14 +333,12 @@ class stats_observer : public generation_observer
 
         auto elapsed = clock::now() - _entity_start;
         total_generation_time += elapsed;
-        if (elapsed < min_entity_time) min_entity_time = elapsed;
-        if (elapsed > max_entity_time) max_entity_time = elapsed;
+        min_entity_time = std::min(min_entity_time, elapsed);
+        max_entity_time = std::max(max_entity_time, elapsed);
 
         total_components_in_entities += _current_entity_components;
-        if (_current_entity_components < min_components_per_entity)
-            min_components_per_entity = _current_entity_components;
-        if (_current_entity_components > max_components_per_entity)
-            max_components_per_entity = _current_entity_components;
+        min_components_per_entity = std::min(min_components_per_entity, _current_entity_components);
+        max_components_per_entity = std::max(max_components_per_entity, _current_entity_components);
     }
 
     void on_before_component(const std::wstring& key) override
@@ -413,24 +412,24 @@ class stats_observer : public generation_observer
 
   private:
     // Timing state (not part of the public stats).
-    clock::time_point _entity_start{};
+    clock::time_point _entity_start;
     std::map<std::wstring, clock::time_point> _component_start;
     std::size_t _current_entity_components{0};
 
     // Best-effort display string for value distribution tracking.
     static std::wstring display_for(const std::any& value)
     {
-        if (auto* ws = std::any_cast<std::wstring>(&value))
+        if (const auto* ws = std::any_cast<std::wstring>(&value))
             return *ws;
-        if (auto* i = std::any_cast<int>(&value))
+        if (const auto* i = std::any_cast<int>(&value))
             return std::to_wstring(*i);
-        if (auto* d = std::any_cast<double>(&value))
+        if (const auto* d = std::any_cast<double>(&value))
             return std::to_wstring(*d);
-        if (auto* f = std::any_cast<float>(&value))
+        if (const auto* f = std::any_cast<float>(&value))
             return std::to_wstring(*f);
-        if (auto* l = std::any_cast<long>(&value))
+        if (const auto* l = std::any_cast<long>(&value))
             return std::to_wstring(*l);
-        if (auto* b = std::any_cast<bool>(&value))
+        if (const auto* b = std::any_cast<bool>(&value))
             return *b ? L"true" : L"false";
         return L"<other>";
     }

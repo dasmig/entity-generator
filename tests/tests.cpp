@@ -2,6 +2,7 @@
 #include "../dasmig/entitygen.hpp"
 #include "../dasmig/ext/stats_observer.hpp"
 #include <atomic>
+#include <limits>
 #include <set>
 #include <sstream>
 
@@ -68,7 +69,7 @@ class random_int_component : public dasmig::component
     [[nodiscard]] std::any generate(
         const dasmig::generation_context& ctx) const override
     {
-        return ctx.random().get(_lo, _hi);
+        return dasmig::core::uniform_int(ctx.random(), _lo, _hi);
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -174,7 +175,7 @@ class scaled_component : public dasmig::component
     [[nodiscard]] std::any generate(
         const dasmig::generation_context& ctx) const override
     {
-        int base = ctx.random().get(1, 10);
+        int base = dasmig::core::uniform_int(ctx.random(), 1, 10);
         int lvl = ctx.has(L"level") ? ctx.get<int>(L"level") : 1;
         return base * lvl;
     }
@@ -260,7 +261,7 @@ class always_invalid_component : public dasmig::component
     [[nodiscard]] std::any generate(
         const dasmig::generation_context& ctx) const override
     {
-        return ctx.random().get(1, 100);
+        return dasmig::core::uniform_int(ctx.random(), 1, 100);
     }
 
     [[nodiscard]] bool validate(const std::any& /*value*/) const override
@@ -286,7 +287,7 @@ class even_only_component : public dasmig::component
     [[nodiscard]] std::any generate(
         const dasmig::generation_context& ctx) const override
     {
-        return ctx.random().get(1, 1000);
+        return dasmig::core::uniform_int(ctx.random(), 1, 1000);
     }
 
     [[nodiscard]] bool validate(const std::any& value) const override
@@ -1179,9 +1180,8 @@ TEST_CASE("component seed reproduces the same value when used directly", "[seed]
     int original_value = e.get<int>(L"rand");
 
     // Manually seed a random engine with the captured seed and generate.
-    effolkronium::random_local rng;
-    rng.seed(static_cast<std::mt19937::result_type>(captured_seed));
-    int replayed_value = rng.get(1, 10000);
+    dasmig::core::rng rng{captured_seed};
+    int replayed_value = dasmig::core::uniform_int(rng, 1, 10000);
 
     REQUIRE(original_value == replayed_value);
 }
@@ -1250,10 +1250,11 @@ TEST_CASE("entity seed reproduces all component seeds", "[seed][entity]")
 
     auto e = gen.generate(42);
 
-    // Derive component seeds from the entity seed the same way generate_impl does.
-    std::mt19937 local_engine{static_cast<std::mt19937::result_type>(e.seed())};
-    auto expected_seed_a = static_cast<std::uint64_t>(local_engine());
-    auto expected_seed_b = static_cast<std::uint64_t>(local_engine());
+    // Derive component seeds from the entity seed as documented: the first
+    // value of the component's "seed" stream, split from the entity seed by key.
+    const dasmig::core::rng root{e.seed()};
+    auto expected_seed_a = root.split("a").split("seed")();
+    auto expected_seed_b = root.split("b").split("seed")();
 
     REQUIRE(e.seed(L"a") == expected_seed_a);
     REQUIRE(e.seed(L"b") == expected_seed_b);
@@ -2748,7 +2749,7 @@ TEST_CASE("callback_component uses ctx random", "[generic][callback]")
     dasmig::eg gen;
     gen.add(std::make_unique<cb_component<int>>(
         L"roll", [](const dasmig::generation_context& ctx) -> int {
-            return ctx.random().get(1, 6);
+            return dasmig::core::uniform_int(ctx.random(), 1, 6);
         }));
 
     auto val = gen.generate().get<int>(L"roll");
@@ -2762,7 +2763,7 @@ TEST_CASE("callback_component seeded is deterministic", "[generic][callback][see
         dasmig::eg gen;
         gen.add(std::make_unique<cb_component<int>>(
             L"r", [](const dasmig::generation_context& ctx) -> int {
-                return ctx.random().get(1, 10000);
+                return dasmig::core::uniform_int(ctx.random(), 1, 10000);
             }));
         return gen.generate(42);
     };
@@ -4006,4 +4007,186 @@ TEST_CASE("entity to_map on empty entity returns empty map",
     dasmig::eg gen;
     auto e = gen.generate();
     REQUIRE(e.to_map().empty());
+}
+
+// ---------------------------------------------------------------------------
+// Known answers (rule 2): the same seed and components give these exact
+// results on every compiler and platform. A change here is a change of
+// output and needs a major version.
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+void add_kat_components(dasmig::eg& g)
+{
+    using namespace dasmig;
+    g.add(std::make_unique<choice_component<std::wstring>>(
+             L"class", std::vector<std::wstring>{L"warrior", L"mage", L"rogue", L"cleric"}))
+        .add(std::make_unique<range_component<int>>(L"level", 1, 60))
+        .add(std::make_unique<range_component<double>>(L"luck", 0.0, 1.0))
+        .add(std::make_unique<weighted_choice_component<std::wstring>>(
+            L"rarity", std::vector<weighted_choice_component<std::wstring>::option>{
+                           {L"common", 70}, {L"rare", 25}, {L"epic", 5}}))
+        .add(std::make_unique<constant_component<bool>>(L"alive", true))
+        .add(std::make_unique<range_component<int>>(L"gold", 0, 1000), 0.5);
+}
+
+std::uint64_t fnv1a(const std::string& s, std::uint64_t h = 0xcbf29ce484222325ULL)
+{
+    for (const char c : s)
+    {
+        h ^= static_cast<unsigned char>(c);
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
+} // namespace
+
+TEST_CASE("known answers for fixed seeds", "[kat]")
+{
+    dasmig::eg g;
+    add_kat_components(g);
+    REQUIRE(g.generate(1).to_json() ==
+            R"({"components":{"class":"warrior","level":47,"luck":0.8571650338411319,"rarity":"common","alive":true,"gold":34},"signature":{"seed":"0000000000000001","data":"0000000000000000"}})");
+    REQUIRE(g.generate(2).to_json() ==
+            R"({"components":{"class":"cleric","level":26,"luck":0.11324040919136602,"rarity":"common","alive":true,"gold":870},"signature":{"seed":"0000000000000002","data":"0000000000000000"}})");
+
+    std::uint64_t h = 0xcbf29ce484222325ULL;
+    for (const auto& e : g.generate_batch(10000, 7)) h = fnv1a(e.to_json(), h);
+    REQUIRE(h == 0xff5e8a58727602b3ULL);
+}
+
+// ---------------------------------------------------------------------------
+// Streams, replay and batches
+// ---------------------------------------------------------------------------
+
+TEST_CASE("adding or removing a component does not change the others", "[seed][kat]")
+{
+    dasmig::eg g;
+    add_kat_components(g);
+    const auto before = g.generate(5);
+
+    g.add(std::make_unique<dasmig::range_component<int>>(L"extra", 1, 100));
+    g.remove(L"class");
+    const auto after = g.generate(5);
+    for (const auto* key : {L"level", L"rarity", L"alive"})
+    {
+        REQUIRE(after.to_map().at(key) == before.to_map().at(key));
+        REQUIRE(after.seed(key) == before.seed(key));
+    }
+    REQUIRE(after.has(L"gold") == before.has(L"gold")); // the weight roll too
+}
+
+TEST_CASE("entity::seed() replays the entity, also after entity retries", "[seed][validation]")
+{
+    dasmig::eg g;
+    g.add(std::make_unique<dasmig::range_component<int>>(L"roll", 1, 6));
+    g.set_validator([](const dasmig::entity& e) { return e.get<int>(L"roll") == 6; });
+    g.max_retries(200);
+
+    const auto e = g.generate(11);
+    REQUIRE(e.get<int>(L"roll") == 6);
+    const auto replay = g.generate(e.seed());
+    REQUIRE(replay.to_json() == e.to_json());
+}
+
+TEST_CASE("seeded batch and async batch give the same entities", "[batch][async][seed]")
+{
+    dasmig::eg g;
+    add_kat_components(g);
+    const auto batch = g.generate_batch(50, 99);
+    const auto async = g.generate_batch_async(50, 99);
+    REQUIRE(batch.size() == async.size());
+    for (std::size_t i = 0; i < batch.size(); ++i)
+    {
+        REQUIRE(batch[i].to_json() == async[i].to_json());
+        REQUIRE(g.generate(batch[i].seed()).to_json() == batch[i].to_json());
+    }
+
+    // Unseeded: the same engine state gives the same batch both ways.
+    g.seed(3);
+    const auto a = g.generate_batch(5);
+    g.seed(3);
+    const auto b = g.generate_batch_async(5);
+    for (std::size_t i = 0; i < a.size(); ++i) REQUIRE(a[i].to_json() == b[i].to_json());
+}
+
+TEST_CASE("64-bit seeds differing only in their high bits differ", "[seed]")
+{
+    dasmig::eg g;
+    add_kat_components(g);
+    REQUIRE(g.generate(1).to_json() != g.generate(1 | (1ULL << 40U)).to_json());
+}
+
+// ---------------------------------------------------------------------------
+// JSON
+// ---------------------------------------------------------------------------
+
+namespace
+{
+
+struct point
+{
+    int x;
+    int y;
+};
+
+class point_component : public dasmig::component
+{
+  public:
+    [[nodiscard]] std::wstring key() const override { return L"point"; }
+    [[nodiscard]] std::any generate(const dasmig::generation_context& ctx) const override
+    {
+        return point{dasmig::core::uniform_int(ctx.random(), 0, 9),
+                     dasmig::core::uniform_int(ctx.random(), 0, 9)};
+    }
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        const auto p = std::any_cast<point>(value);
+        return std::to_wstring(p.x) + L"," + std::to_wstring(p.y);
+    }
+};
+
+} // namespace
+
+TEST_CASE("to_json writes typed values", "[json]")
+{
+    dasmig::eg g;
+    g.add(std::make_unique<dasmig::constant_component<std::wstring>>(L"name", L"João \"JJ\""))
+        .add(std::make_unique<dasmig::constant_component<double>>(L"nan",
+                                                                  std::numeric_limits<double>::quiet_NaN()))
+        .add(std::make_unique<dasmig::constant_component<long long>>(L"big", -9000000000LL))
+        .add(std::make_unique<point_component>());
+    const auto json = g.generate(1).to_json();
+    REQUIRE(json.starts_with("{\"components\":{\"name\":\"Jo\xC3\xA3o \\\"JJ\\\"\",\"nan\":null,\"big\":-9000000000,\"point\":\""));
+    REQUIRE(json.ends_with(R"("signature":{"seed":"0000000000000001","data":"0000000000000000"}})"));
+    REQUIRE(g.generate(1).signature().seed == 1);
+}
+
+// ---------------------------------------------------------------------------
+// Generic components on dasmig-core
+// ---------------------------------------------------------------------------
+
+TEST_CASE("weighted_choice_component rejects bad weights", "[components][errors]")
+{
+    using wc = dasmig::weighted_choice_component<int>;
+    REQUIRE_THROWS_WITH(wc(L"w", {{1, -1.0}, {2, 1.0}}), "option weights must be finite and non-negative");
+    REQUIRE_THROWS_WITH(wc(L"w", {{1, std::numeric_limits<double>::infinity()}}),
+                        "option weights must be finite and non-negative");
+    REQUIRE_THROWS_WITH(wc(L"w", {{1, 0.0}}), "at least one option must have a positive weight");
+    REQUIRE_THROWS_WITH(wc(L"w", {}), "options must not be empty");
+}
+
+TEST_CASE("float range_component stays below hi", "[components]")
+{
+    dasmig::eg g;
+    g.add(std::make_unique<dasmig::range_component<float>>(L"f", 0.0f, 1.0f));
+    for (std::uint64_t s = 0; s < 2000; ++s)
+    {
+        const auto v = g.generate(s).get<float>(L"f");
+        REQUIRE(v >= 0.0f);
+        REQUIRE(v < 1.0f);
+    }
 }

@@ -1,13 +1,17 @@
 #ifndef DASMIG_ENTITYGEN_HPP
 #define DASMIG_ENTITYGEN_HPP
 
-#include "random.hpp"
+#include "core.hpp"
 #include <algorithm>
 #include <any>
+#include <cmath>
+#include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <future>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <memory>
 #include <optional>
@@ -17,14 +21,23 @@
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 /// @file entitygen.hpp
 /// @brief Entity generator library — composable, deterministic entity generation for C++23.
 /// @author Diego Dasso Migotto (diegomigotto at hotmail dot com)
 /// @see See doc/usage.md for the narrative tutorial.
+
+DASMIG_CORE_REQUIRE(0, 3);
+
 namespace dasmig
 {
+
+/// @brief A component value as JSON: null, a boolean, an integer, a number
+///        or a (UTF-8) string.
+/// @see component::to_json()
+using json_value = std::variant<std::nullptr_t, bool, std::int64_t, double, std::string>;
 
 // Forward declaration.
 class eg;
@@ -57,9 +70,18 @@ class generation_context
         return std::any_cast<T>(_values.at(component_key));
     }
 
-    /// @brief Access the random engine for this generation.
-    /// @return A reference to the per-component seeded random engine.
-    [[nodiscard]] effolkronium::random_local& random() const
+    /// @brief Access the random engine for this component.
+    ///
+    /// Seeded with the component's seed (entity::seed(key)), so the same
+    /// draws reproduce the value. Use it with the dasmig-core functions,
+    /// which give the same results on every platform:
+    /// @code
+    /// int age = dasmig::core::uniform_int(ctx.random(), 18, 65);
+    /// const auto& title = dasmig::core::pick(ctx.random(), titles);
+    /// bool lucky = dasmig::core::bernoulli(ctx.random(), 0.1);
+    /// @endcode
+    /// @return A reference to the per-component seeded engine.
+    [[nodiscard]] core::rng& random() const
     {
         return _random;
     }
@@ -71,8 +93,8 @@ class generation_context
     // Already-generated component values indexed by key.
     std::map<std::wstring, std::any> _values;
 
-    // Instance-based random engine for reproducible generation.
-    mutable effolkronium::random_local _random;
+    // Per-component engine, reseeded before each component generates.
+    mutable core::rng _random{0};
 
     // Allows entity generator to construct and populate contexts.
     friend class eg;
@@ -87,6 +109,12 @@ class generation_context
 class component
 {
   public:
+    component() = default;                                ///< Default constructor.
+    component(const component&) = default;                ///< Copyable.
+    component& operator=(const component&) = default;     ///< Copyable.
+    component(component&&) noexcept = default;            ///< Movable.
+    component& operator=(component&&) noexcept = default; ///< Movable.
+
     /// @brief Virtual destructor for proper cleanup of derived classes.
     virtual ~component() = default;
 
@@ -106,6 +134,19 @@ class component
     /// @return A human-readable wide-string representation.
     /// @see default_to_string()
     [[nodiscard]] virtual std::wstring to_string(const std::any& value) const = 0;
+
+    /// @brief Convert a generated value to JSON, for entity::to_json().
+    ///
+    /// The default writes `bool` as a boolean, integers as integers,
+    /// `double` and `float` as numbers (non-finite ones as null),
+    /// `std::wstring` and `std::string` as strings, and anything else as the
+    /// string from to_string(). Override it to write a richer value.
+    /// @param value The value previously returned by generate().
+    /// @return The JSON value.
+    [[nodiscard]] virtual json_value to_json(const std::any& value) const
+    {
+        return default_to_json(value, to_string(value));
+    }
 
     /// @brief Inclusion weight for this component (0.0 to 1.0).
     ///
@@ -172,6 +213,31 @@ class component
         }
 
         return L"[?]";
+    }
+
+    /// @brief Default JSON conversion used by to_json().
+    /// @param value The value to convert.
+    /// @param display Its to_string() form, used for unrecognized types.
+    /// @return The JSON value.
+    [[nodiscard]] static json_value default_to_json(const std::any& value,
+                                                    const std::wstring& display)
+    {
+        const auto& type = value.type();
+        if (type == typeid(bool)) return std::any_cast<bool>(value);
+        if (type == typeid(int)) return std::int64_t{std::any_cast<int>(value)};
+        if (type == typeid(long)) return std::int64_t{std::any_cast<long>(value)};
+        if (type == typeid(long long)) return std::int64_t{std::any_cast<long long>(value)};
+        if (type == typeid(unsigned)) return std::int64_t{std::any_cast<unsigned>(value)};
+        if (type == typeid(double) || type == typeid(float))
+        {
+            const double d = type == typeid(double) ? std::any_cast<double>(value)
+                                                    : double{std::any_cast<float>(value)};
+            if (!std::isfinite(d)) return nullptr;
+            return d;
+        }
+        if (type == typeid(std::wstring)) return core::to_utf8(std::any_cast<std::wstring>(value));
+        if (type == typeid(std::string)) return std::any_cast<std::string>(value);
+        return core::to_utf8(display);
     }
 };
 
@@ -247,7 +313,7 @@ class choice_component : public component
     [[nodiscard]] std::any generate(
         const generation_context& ctx) const override
     {
-        return *ctx.random().get(_choices);
+        return core::pick(ctx.random(), _choices);
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -264,11 +330,12 @@ class choice_component : public component
     Formatter _fmt;
 };
 
-/// @brief Component that generates a uniform random value in [lo, hi].
-/// @tparam T An arithmetic type (`int`, `double`, `float`, etc.).
+/// @brief Component that generates a uniform random value: integers in
+///        [lo, hi], floating-point values in [lo, hi).
+/// @tparam T An integer type (not `bool`) or a floating-point type.
 /// @tparam Formatter Optional callable for custom string conversion.
 template <typename T, typename Formatter = use_default_formatter>
-    requires std::is_arithmetic_v<T>
+    requires(std::integral<T> && !std::same_as<T, bool>) || std::floating_point<T>
 class range_component : public component
 {
   public:
@@ -277,7 +344,7 @@ class range_component : public component
     /// @param lo Lower bound (inclusive).
     /// @param hi Upper bound (inclusive).
     /// @param fmt Optional custom formatter.
-    explicit range_component(std::wstring key, T lo, T hi,
+    explicit range_component(std::wstring key, T lo, T hi, // NOLINT(bugprone-easily-swappable-parameters)
                              Formatter fmt = {})
         : _key{std::move(key)}, _lo{lo}, _hi{hi}, _fmt{std::move(fmt)} {}
 
@@ -286,7 +353,18 @@ class range_component : public component
     [[nodiscard]] std::any generate(
         const generation_context& ctx) const override
     {
-        return ctx.random().get(_lo, _hi);
+        if constexpr (std::floating_point<T>)
+        {
+            auto v = static_cast<T>(core::uniform_real(ctx.random(), static_cast<double>(_lo),
+                                                       static_cast<double>(_hi)));
+            // Narrowing to float can round up to hi; keep the range half-open.
+            if (v >= _hi && _hi > _lo) v = std::nextafter(_hi, _lo);
+            return v;
+        }
+        else
+        {
+            return core::uniform_int(ctx.random(), _lo, _hi);
+        }
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -358,7 +436,8 @@ callback_component(std::wstring, GenFn, Formatter = {})
 /// @brief Component that picks from a list of values using per-option weights.
 ///
 /// Weights are relative (they don't need to sum to 1.0). A weight of 0
-/// means the option is never selected.
+/// means the option is never selected. The choice is dasmig-core's weighted
+/// choice (the same algorithm as core::weighted_table), built once.
 /// @tparam T The value type.
 /// @tparam Formatter Optional callable for custom string conversion.
 template <typename T, typename Formatter = use_default_formatter>
@@ -377,19 +456,14 @@ class weighted_choice_component : public component
     /// @param options Non-empty list of value–weight pairs. At least one
     ///                must have a positive weight.
     /// @param fmt Optional custom formatter.
-    /// @throws std::invalid_argument If @p options is empty or all weights are zero.
+    /// @throws std::invalid_argument If @p options is empty, a weight is
+    ///         negative or not finite, or all weights are zero.
     explicit weighted_choice_component(std::wstring key,
                                        std::vector<option> options,
                                        Formatter fmt = {})
         : _key{std::move(key)}, _options{std::move(options)},
-          _fmt{std::move(fmt)}
+          _fmt{std::move(fmt)}, _dist{weights_of(_options)}
     {
-        if (_options.empty())
-            throw std::invalid_argument("options must not be empty");
-        if (!std::ranges::any_of(_options,
-                [](const auto& o) { return o.weight > 0.0; }))
-            throw std::invalid_argument(
-                "at least one option must have a positive weight");
     }
 
     [[nodiscard]] std::wstring key() const override { return _key; }
@@ -397,14 +471,7 @@ class weighted_choice_component : public component
     [[nodiscard]] std::any generate(
         const generation_context& ctx) const override
     {
-        std::vector<double> weights;
-        weights.reserve(_options.size());
-        std::ranges::transform(_options, std::back_inserter(weights),
-            &option::weight);
-
-        std::discrete_distribution<std::size_t> dist(
-            weights.begin(), weights.end());
-        return _options[dist(ctx.random().engine())].value;
+        return _options[_dist(ctx.random())].value;
     }
 
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
@@ -416,9 +483,29 @@ class weighted_choice_component : public component
     }
 
   private:
+    // Checked here so the messages name the problem before core::discrete
+    // sees the weights.
+    static std::vector<double> weights_of(const std::vector<option>& options)
+    {
+        if (options.empty())
+            throw std::invalid_argument("options must not be empty");
+        if (!std::ranges::all_of(options, [](const auto& o) {
+                return std::isfinite(o.weight) && o.weight >= 0.0;
+            }))
+            throw std::invalid_argument("option weights must be finite and non-negative");
+        if (!std::ranges::any_of(options, [](const auto& o) { return o.weight > 0.0; }))
+            throw std::invalid_argument(
+                "at least one option must have a positive weight");
+        std::vector<double> weights;
+        weights.reserve(options.size());
+        std::ranges::transform(options, std::back_inserter(weights), &option::weight);
+        return weights;
+    }
+
     std::wstring _key;
     std::vector<option> _options;
     Formatter _fmt;
+    core::discrete _dist;
 };
 
 /// @}
@@ -480,11 +567,49 @@ class entity
 
     /// @brief Retrieve the random seed used to generate this entity.
     ///
-    /// This seed can reproduce all component seeds and thus the entire entity.
+    /// eg::generate(seed()) with the same components reproduces the entity:
+    /// it is the call seed, or the seed of the attempt the entity validator
+    /// accepted. Component @c k drew from
+    /// `core::rng{seed()}.split(core::to_utf8(k))`.
     /// @return The entity-level seed.
     [[nodiscard]] std::uint64_t seed() const
     {
         return _seed;
+    }
+
+    /// @brief The seed this entity was generated from, in the format every
+    ///        dasmig result uses (the entity generator has no data, so
+    ///        `data` is 0).
+    /// @return The replay signature.
+    [[nodiscard]] core::seed_signature signature() const
+    {
+        return {.seed = _seed, .data = 0};
+    }
+
+    /// @brief Write this entity as a JSON object
+    ///        `{"components":{"key":value,…},"signature":{…}}`, components
+    ///        in generation order, values from component::to_json().
+    /// @param w Writer positioned where a value is allowed.
+    void to_json(core::json_writer& w) const
+    {
+        w.begin_object().key("components").begin_object();
+        for (const auto& e : _entries)
+        {
+            w.key(core::to_utf8(e.key));
+            std::visit([&w](const auto& v) { w.value(v); }, e.json);
+        }
+        w.end_object().key("signature");
+        signature().to_json(w);
+        w.end_object();
+    }
+
+    /// @brief This entity as a JSON document.
+    /// @return Compact JSON.
+    [[nodiscard]] std::string to_json() const
+    {
+        core::json_writer w;
+        to_json(w);
+        return w.str();
     }
 
     /// @brief Get all component keys present in this entity, in generation order.
@@ -546,6 +671,7 @@ class entity
         std::any value;
         std::wstring display;
         std::uint64_t seed;
+        json_value json;
     };
 
     // Private constructor, this is mostly a helper class to the entity
@@ -583,6 +709,12 @@ class entity
 class generation_observer
 {
   public:
+    generation_observer() = default;                                          ///< Default constructor.
+    generation_observer(const generation_observer&) = default;                ///< Copyable.
+    generation_observer& operator=(const generation_observer&) = default;     ///< Copyable.
+    generation_observer(generation_observer&&) noexcept = default;            ///< Movable.
+    generation_observer& operator=(generation_observer&&) noexcept = default; ///< Movable.
+
     /// @brief Virtual destructor.
     virtual ~generation_observer() = default;
 
@@ -686,8 +818,8 @@ class eg
 
     eg(const eg&) = delete;            ///< Not copyable.
     eg& operator=(const eg&) = delete; ///< Not copyable.
-    eg(eg&&) = default;                ///< Move constructor.
-    eg& operator=(eg&&) = default;     ///< Move assignment.
+    eg(eg&&) noexcept = default;            ///< Move constructor.
+    eg& operator=(eg&&) noexcept = default; ///< Move assignment.
     ~eg() = default;                   ///< Default destructor.
 
     /// @brief Access the global singleton instance.
@@ -723,7 +855,7 @@ class eg
         }
         else
         {
-            _components.push_back({key, std::move(comp)});
+            _components.push_back({.key = key, .comp = std::move(comp)});
         }
 
         notify(&generation_observer::on_after_add, key);
@@ -822,7 +954,7 @@ class eg
     /// @return `*this` for chaining.
     eg& seed(std::uint64_t seed_value)
     {
-        _engine.seed(static_cast<std::mt19937::result_type>(seed_value));
+        _engine.seed(seed_value);
 
         return *this;
     }
@@ -833,7 +965,7 @@ class eg
     /// @return `*this` for chaining.
     eg& unseed()
     {
-        _engine.seed(std::random_device{}());
+        _engine.unseed();
 
         return *this;
     }
@@ -910,28 +1042,26 @@ class eg
 
     /// @brief Generate an entity with all registered components.
     ///
-    /// Uses the generator's internal engine.
+    /// Draws a call seed from the generator's engine.
     /// @return The generated entity.
     /// @throws std::runtime_error If component or entity validation is exhausted.
     [[nodiscard]] entity generate()
     {
-        auto refs = all_component_refs();
-        return generate_with_hooks([&] {
-            return generate_impl(refs, _engine, _max_retries, _observers);
-        });
+        return generate(_engine());
     }
 
     /// @brief Generate an entity with all registered components using a seed.
+    ///
+    /// The same seed and components give the same entity on every compiler
+    /// and platform. Each component draws from a stream split from the seed
+    /// by its key, so adding or removing a component does not change the
+    /// others.
     /// @param call_seed Seed for reproducible results.
     /// @return The generated entity.
     /// @throws std::runtime_error If validation is exhausted.
     [[nodiscard]] entity generate(std::uint64_t call_seed) const
     {
-        auto refs = all_component_refs();
-        std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
-        return generate_with_hooks([&] {
-            return generate_impl(refs, engine, _max_retries, _observers);
-        });
+        return generate_seeded(all_component_refs(), call_seed);
     }
 
     /// @brief Generate an entity with only the specified components.
@@ -942,10 +1072,7 @@ class eg
     /// @throws std::runtime_error If validation is exhausted.
     [[nodiscard]] entity generate(std::span<const std::wstring> component_keys)
     {
-        auto filtered = filter_components(component_keys);
-        return generate_with_hooks([&] {
-            return generate_impl(filtered, _engine, _max_retries, _observers);
-        });
+        return generate(component_keys, _engine());
     }
 
     /// @brief Generate an entity with only the specified components using a seed.
@@ -956,11 +1083,7 @@ class eg
     [[nodiscard]] entity generate(std::span<const std::wstring> component_keys,
                                   std::uint64_t call_seed) const
     {
-        auto filtered = filter_components(component_keys);
-        std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
-        return generate_with_hooks([&] {
-            return generate_impl(filtered, engine, _max_retries, _observers);
-        });
+        return generate_seeded(filter_components(component_keys), call_seed);
     }
 
     /// @brief Generate with an initializer list of keys (convenience overload).
@@ -985,46 +1108,33 @@ class eg
     /// @{
 
     /// @brief Generate multiple entities with all registered components.
+    ///
+    /// Each entity gets its own call seed from the generator's engine.
     /// @param count Number of entities to generate.
     /// @return A vector of generated entities.
     [[nodiscard]] std::vector<entity> generate_batch(std::size_t count)
     {
-        std::vector<entity> entities;
-        entities.reserve(count);
-
-        auto refs = all_component_refs();
-        std::generate_n(std::back_inserter(entities), count,
-            [&] {
-                return generate_with_hooks([&] {
-                    return generate_impl(refs, _engine, _max_retries, _observers);
-                });
-            });
-
-        return entities;
+        return generate_batch(count, _engine());
     }
 
     /// @brief Generate multiple entities using a seed.
     ///
-    /// The seed initializes the engine once; successive entities draw from
-    /// the same deterministic sequence.
+    /// Entity @c i uses the @c i-th value of `core::rng{call_seed}.split("batch")`
+    /// as its call seed, so the result equals generate_batch_async(count,
+    /// call_seed) and each entity replays with generate(e.seed()).
     /// @param count Number of entities to generate.
     /// @param call_seed Seed for reproducible results.
     /// @return A vector of generated entities.
     [[nodiscard]] std::vector<entity> generate_batch(
         std::size_t count, std::uint64_t call_seed) const
     {
+        const auto refs = all_component_refs();
         std::vector<entity> entities;
         entities.reserve(count);
-
-        auto refs = all_component_refs();
-        std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
-        std::generate_n(std::back_inserter(entities), count,
-            [&] {
-                return generate_with_hooks([&] {
-                    return generate_impl(refs, engine, _max_retries, _observers);
-                });
-            });
-
+        for (const auto entity_seed : batch_seeds(count, call_seed))
+        {
+            entities.push_back(generate_seeded(refs, entity_seed));
+        }
         return entities;
     }
 
@@ -1034,75 +1144,36 @@ class eg
 
     /// @brief Generate multiple entities concurrently.
     ///
-    /// Entity seeds are pre-derived sequentially from the engine, then each
-    /// entity is generated in its own async task. Results are returned in
-    /// seed order. If observers are set, the caller is responsible for their
-    /// thread safety.
+    /// Same entities as generate_batch() would give from the same engine
+    /// state; each entity is generated in its own async task. Results are
+    /// returned in order. If observers are set, the caller is responsible
+    /// for their thread safety.
     /// @param count Number of entities to generate.
     /// @return A vector of generated entities.
     [[nodiscard]] std::vector<entity> generate_batch_async(std::size_t count)
     {
-        auto refs = all_component_refs();
-
-        std::vector<std::uint64_t> seeds(count);
-        std::ranges::generate(seeds,
-            [&] { return static_cast<std::uint64_t>(_engine()); });
-
-        std::vector<std::future<entity>> futures;
-        futures.reserve(count);
-        std::ranges::transform(seeds, std::back_inserter(futures),
-            [this, &refs](auto task_seed) {
-                return std::async(std::launch::async,
-                    [this, &refs, task_seed] {
-                        std::mt19937 engine{
-                            static_cast<std::mt19937::result_type>(task_seed)};
-                        return generate_with_hooks([&] {
-                            return generate_impl(
-                                refs, engine, _max_retries, _observers);
-                        });
-                    });
-            });
-
-        std::vector<entity> entities;
-        entities.reserve(count);
-        std::ranges::transform(futures, std::back_inserter(entities),
-            [](auto& f) { return f.get(); });
-
-        return entities;
+        return generate_batch_async(count, _engine());
     }
 
     /// @brief Generate multiple entities concurrently using a seed.
     ///
-    /// The seed initializes a dedicated engine for pre-deriving per-entity
-    /// seeds; all subsequent generation is parallel.
+    /// Gives the same entities as generate_batch(count, call_seed).
     /// @param count Number of entities to generate.
     /// @param call_seed Seed for reproducible results.
     /// @return A vector of generated entities.
     [[nodiscard]] std::vector<entity> generate_batch_async(
         std::size_t count, std::uint64_t call_seed) const
     {
-        auto refs = all_component_refs();
-
-        std::mt19937 seed_engine{
-            static_cast<std::mt19937::result_type>(call_seed)};
-        std::vector<std::uint64_t> seeds(count);
-        std::ranges::generate(seeds,
-            [&] { return static_cast<std::uint64_t>(seed_engine()); });
+        const auto refs = all_component_refs();
 
         std::vector<std::future<entity>> futures;
         futures.reserve(count);
-        std::ranges::transform(seeds, std::back_inserter(futures),
-            [this, &refs](auto task_seed) {
-                return std::async(std::launch::async,
-                    [this, &refs, task_seed] {
-                        std::mt19937 engine{
-                            static_cast<std::mt19937::result_type>(task_seed)};
-                        return generate_with_hooks([&] {
-                            return generate_impl(
-                                refs, engine, _max_retries, _observers);
-                        });
-                    });
-            });
+        for (const auto entity_seed : batch_seeds(count, call_seed))
+        {
+            futures.push_back(std::async(std::launch::async, [this, &refs, entity_seed] {
+                return generate_seeded(refs, entity_seed);
+            }));
+        }
 
         std::vector<entity> entities;
         entities.reserve(count);
@@ -1150,16 +1221,11 @@ class eg
     /// @throws std::out_of_range If the group does not exist.
     [[nodiscard]] entity generate_group(const std::wstring& group_name)
     {
-        auto it = _groups.find(group_name);
-        if (it == _groups.end())
+        if (!has_group(group_name))
         {
             throw std::out_of_range("group not found");
         }
-
-        auto filtered = filter_components(it->second);
-        return generate_with_hooks([&] {
-            return generate_impl(filtered, _engine, _max_retries, _observers);
-        });
+        return generate_group(group_name, _engine());
     }
 
     /// @brief Generate an entity using a named group with a seed.
@@ -1176,11 +1242,7 @@ class eg
             throw std::out_of_range("group not found");
         }
 
-        auto filtered = filter_components(it->second);
-        std::mt19937 engine{static_cast<std::mt19937::result_type>(call_seed)};
-        return generate_with_hooks([&] {
-            return generate_impl(filtered, engine, _max_retries, _observers);
-        });
+        return generate_seeded(filter_components(it->second), call_seed);
     }
 
     /// @}
@@ -1205,49 +1267,94 @@ class eg
     using observer_list =
         std::vector<std::shared_ptr<generation_observer>>;
 
-    // Notify all observers in a list by calling a member function.
+    // Notify all observers in a list by calling a member function. The
+    // arguments go to every observer, so they are passed as lvalues (never
+    // forwarded: the first observer could move from them).
     template <typename Hook, typename... Args>
     static void notify_all(const observer_list& observers,
-                           Hook hook, Args&&... args)
+                           Hook hook, const Args&... args)
     {
         for (const auto& obs : observers)
         {
-            ((*obs).*hook)(std::forward<Args>(args)...);
+            ((*obs).*hook)(args...);
         }
     }
 
     // Convenience: notify using the instance's observer list.
     template <typename Hook, typename... Args>
-    void notify(Hook hook, Args&&... args) const
+    void notify(Hook hook, const Args&... args) const
     {
-        notify_all(_observers, hook, std::forward<Args>(args)...);
+        notify_all(_observers, hook, args...);
     }
 
-    // Core generation logic shared by all overloads.
+    // The call seeds of a batch.
+    [[nodiscard]] static std::vector<std::uint64_t> batch_seeds(
+        std::size_t count, std::uint64_t call_seed) // NOLINT(bugprone-easily-swappable-parameters)
+    {
+        auto r = core::rng{call_seed}.split("batch");
+        std::vector<std::uint64_t> seeds(count);
+        std::ranges::generate(seeds, [&r] { return r(); });
+        return seeds;
+    }
+
+    // One entity from a call seed: hooks, entity validation and retries.
+    // Attempt 0 uses the call seed itself; attempt k uses the k-th value of
+    // core::rng{call_seed}.split("attempt").
+    [[nodiscard]] entity generate_seeded(std::span<const component_ref> refs,
+                                         std::uint64_t call_seed) const
+    {
+        notify_all(_observers, &generation_observer::on_before_generate);
+        auto attempts = core::rng{call_seed}.split("attempt");
+        std::optional<entity> accepted;
+        for (std::size_t attempt = 0; attempt <= _max_retries; ++attempt)
+        {
+            if (attempt > 0)
+                notify_all(_observers,
+                    &generation_observer::on_before_entity_retry, attempt);
+            const std::uint64_t entity_seed = attempt == 0 ? call_seed : attempts();
+            auto e = generate_impl(refs, entity_seed, _max_retries, _observers);
+            if (attempt > 0)
+                notify_all(_observers,
+                    &generation_observer::on_after_entity_retry, attempt);
+            if (!_validator || _validator(e))
+            {
+                accepted = std::move(e);
+                break;
+            }
+        }
+
+        if (!accepted)
+        {
+            notify_all(_observers, &generation_observer::on_entity_fail);
+            throw std::runtime_error(
+                "entity validation failed after max retries");
+        }
+        notify_all(_observers, &generation_observer::on_after_generate, *accepted);
+        return std::move(*accepted);
+    }
+
+    // One generation attempt. Component k draws from
+    // core::rng{entity_seed}.split(to_utf8(k)): its weight roll from
+    // .split("weight"), its seeds (first try, then retries) from
+    // .split("seed"); the component's own engine is core::rng{its seed}.
     [[nodiscard]] static entity generate_impl(
-        std::span<const component_ref> components, std::mt19937& engine,
+        std::span<const component_ref> components, std::uint64_t entity_seed, // NOLINT(bugprone-easily-swappable-parameters)
         std::size_t max_retries, const observer_list& observers)
     {
         entity generated_entity;
         generation_context ctx;
-
-        // Derive an entity-level seed and use it to create a local engine
-        // for per-component seed derivation.
-        auto entity_seed = static_cast<std::uint64_t>(engine());
         generated_entity._seed = entity_seed;
-        std::mt19937 local_engine{static_cast<std::mt19937::result_type>(entity_seed)};
+        const core::rng root{entity_seed};
 
         for (const auto& ref : components)
         {
-            auto component_seed = static_cast<std::uint64_t>(local_engine());
+            const auto stream = root.split(core::to_utf8(ref.key));
 
-            // Roll against the effective weight. A seed is always consumed
-            // to keep the deterministic sequence stable regardless of which
-            // components are included.
+            // Roll against the effective weight.
             if (ref.effective_weight < 1.0)
             {
-                std::uniform_real_distribution<double> dist(0.0, 1.0);
-                if (dist(local_engine) >= ref.effective_weight)
+                auto roll = stream.split("weight");
+                if (core::uniform01(roll) >= ref.effective_weight)
                 {
                     notify_all(observers,
                         &generation_observer::on_skip, ref.key);
@@ -1266,7 +1373,9 @@ class eg
             notify_all(observers,
                 &generation_observer::on_before_component, ref.key);
 
-            ctx._random.seed(static_cast<std::mt19937::result_type>(component_seed));
+            auto seeds = stream.split("seed");
+            auto component_seed = seeds();
+            ctx._random = core::rng{component_seed};
             auto value = ref.comp.get().generate(ctx);
 
             // Component-level validation with retries.
@@ -1276,9 +1385,8 @@ class eg
             {
                 notify_all(observers,
                     &generation_observer::on_before_retry, ref.key, retry + 1);
-                component_seed = static_cast<std::uint64_t>(local_engine());
-                ctx._random.seed(
-                    static_cast<std::mt19937::result_type>(component_seed));
+                component_seed = seeds();
+                ctx._random = core::rng{component_seed};
                 value = ref.comp.get().generate(ctx);
                 notify_all(observers,
                     &generation_observer::on_after_retry, ref.key,
@@ -1294,6 +1402,7 @@ class eg
             }
 
             auto display = ref.comp.get().to_string(value);
+            auto json = ref.comp.get().to_json(value);
 
             notify_all(observers,
                 &generation_observer::on_after_component, ref.key, value);
@@ -1302,44 +1411,10 @@ class eg
             generated_entity._entries.push_back(
                 {.key = ref.key, .value = std::move(value),
                  .display = std::move(display),
-                 .seed = component_seed});
+                 .seed = component_seed, .json = std::move(json)});
         }
 
         return generated_entity;
-    }
-
-    // --- Generation helpers -----------------------------------------------
-
-    // Apply entity-level validation with retries.
-    template <typename GenFn>
-    [[nodiscard]] entity with_entity_validation(GenFn&& fn) const
-    {
-        for (std::size_t attempt = 0; attempt <= _max_retries; ++attempt)
-        {
-            if (attempt > 0)
-                notify_all(_observers,
-                    &generation_observer::on_before_entity_retry, attempt);
-            auto e = fn();
-            if (attempt > 0)
-                notify_all(_observers,
-                    &generation_observer::on_after_entity_retry, attempt);
-            if (!_validator || _validator(e)) return e;
-        }
-
-        notify_all(_observers, &generation_observer::on_entity_fail);
-        throw std::runtime_error(
-            "entity validation failed after max retries");
-    }
-
-    // Wrap a generation function with before/after generate hooks.
-    template <typename GenFn>
-    [[nodiscard]] entity generate_with_hooks(GenFn&& fn) const
-    {
-        notify_all(_observers, &generation_observer::on_before_generate);
-        auto e = with_entity_validation(std::forward<GenFn>(fn));
-        notify_all(_observers,
-            &generation_observer::on_after_generate, e);
-        return e;
     }
 
     // --- Component resolution ---------------------------------------------
@@ -1405,7 +1480,7 @@ class eg
     std::size_t _max_retries{10};
 
     // Internal random engine for the generator.
-    std::mt19937 _engine{std::random_device{}()};
+    core::rng _engine{core::rng::from_entropy()};
 };
 } // namespace dasmig
 

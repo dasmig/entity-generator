@@ -1,6 +1,9 @@
 CXX      := clang++
 CXXFLAGS := -std=c++23 -Wall -Wextra -Wpedantic -Wno-c2y-extensions -I.
 BUILD    := build
+PYTHON   := python3
+
+HEADERS := dasmig/entitygen.hpp dasmig/ext/stats_observer.hpp dasmig/core.hpp $(wildcard dasmig/core/*.hpp)
 
 EXAMPLE_SRC := examples/example.cpp
 EXAMPLE_BIN := $(BUILD)/example
@@ -15,21 +18,21 @@ COV_DIR   := coverage
 
 all: $(EXAMPLE_BIN)
 
-$(EXAMPLE_BIN): $(EXAMPLE_SRC) dasmig/entitygen.hpp dasmig/random.hpp | $(BUILD)
+$(EXAMPLE_BIN): $(EXAMPLE_SRC) $(HEADERS) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $(EXAMPLE_SRC)
 
-$(TEST_BIN): $(TEST_SRC) dasmig/entitygen.hpp dasmig/random.hpp | $(BUILD)
+$(TEST_BIN): $(TEST_SRC) $(HEADERS) | $(BUILD)
 	$(CXX) $(CXXFLAGS) -o $@ $(TEST_SRC)
 
 test: $(TEST_BIN)
 	./$(TEST_BIN)
 
-coverage: $(TEST_SRC) dasmig/entitygen.hpp dasmig/random.hpp | $(BUILD)
+coverage: $(TEST_SRC) $(HEADERS) | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COV_FLAGS) -o $(BUILD)/test_cov $(TEST_SRC)
 	cd $(BUILD) && ./test_cov
 	llvm-profdata merge -sparse $(BUILD)/default.profraw -o $(BUILD)/tests.profdata
-	llvm-cov report $(BUILD)/test_cov --instr-profile=$(BUILD)/tests.profdata --sources dasmig/entitygen.hpp dasmig/ext/stats_observer.hpp
-	llvm-cov show $(BUILD)/test_cov --instr-profile=$(BUILD)/tests.profdata --sources dasmig/entitygen.hpp dasmig/ext/stats_observer.hpp --format=html -o $(COV_DIR)
+	llvm-cov report $(BUILD)/test_cov --instr-profile=$(BUILD)/tests.profdata --sources $(HEADERS)
+	llvm-cov show $(BUILD)/test_cov --instr-profile=$(BUILD)/tests.profdata --sources $(HEADERS) --format=html -o $(COV_DIR)
 	@echo "Coverage report: $(COV_DIR)/index.html"
 
 $(BUILD):

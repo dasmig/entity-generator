@@ -29,6 +29,8 @@ This guide covers every feature of the entity-generator library in detail. For a
 <li><a href="#extensions">Extensions</a></li>
 <li><a href="#ecs-integration-entt">ECS Integration: EnTT</a></li>
 <li><a href="#ecs-integration-flecs">ECS Integration: Flecs</a></li>
+<li><a href="#random-numbers-in-components">Random Numbers in Components</a></li>
+<li><a href="#migrating-from-v1">Migrating from v1</a></li>
 <li><a href="#error-reference">Error Reference</a></li>
 </ul>
 
@@ -47,7 +49,7 @@ class character_class : public dasmig::component
     {
         static const std::vector<std::wstring> classes{
             L"Warrior", L"Mage", L"Rogue", L"Healer"};
-        return ctx.random().get(classes);
+        return dasmig::core::pick(ctx.random(), classes);
     }
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
     {
@@ -63,7 +65,7 @@ class age : public dasmig::component
     [[nodiscard]] std::any generate(
         const dasmig::generation_context& ctx) const override
     {
-        return ctx.random().get(18, 65);
+        return dasmig::core::uniform_int(ctx.random(), 18, 65);
     }
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
     {
@@ -202,7 +204,7 @@ class player_nickname : public dasmig::component
 
 ## Custom Types
 
-Components can produce any type. Override `to_string()` on your component to enable stream output:
+Components can produce any type. Override `to_string()` on your component to enable stream output, and `to_json()` to write something richer than that string in entity::to_json() (see Entity Serialization):
 
 ```cpp
 struct vec2 { float x, y; };
@@ -215,8 +217,8 @@ class position : public dasmig::component
         const dasmig::generation_context& ctx) const override
     {
         return vec2{
-            ctx.random().get(-100.f, 100.f),
-            ctx.random().get(-100.f, 100.f)};
+            static_cast<float>(dasmig::core::uniform_real(ctx.random(), -100.0, 100.0)),
+            static_cast<float>(dasmig::core::uniform_real(ctx.random(), -100.0, 100.0))};
     }
     [[nodiscard]] std::wstring to_string(const std::any& value) const override
     {
@@ -228,14 +230,15 @@ class position : public dasmig::component
 
 ## Seed Signatures
 
-Every generated entity and component stores the random seed that produced it. This enables replay, debugging, and logging.
+Every generated entity and component stores the random seed that produced it. This enables replay, debugging, and logging. Results are identical on every compiler, standard library and CPU (dasmig-core), so a seed logged on one machine replays on another.
 
 ```cpp
 auto entity = eg::instance().generate();
 
-// Retrieve the entity-level seed. This single value can reproduce
-// all component seeds and thus the entire entity.
+// The entity-level seed: generate(seed) with the same components
+// reproduces the entity.
 std::uint64_t entity_seed = entity.seed();
+auto again = eg::instance().generate(entity_seed);
 
 // Retrieve the seed used for a specific component.
 std::uint64_t age_seed = entity.seed(L"age");
@@ -245,21 +248,23 @@ Component seeds can be used to replay individual component generation:
 
 ```cpp
 // Replay a component's random values using its captured seed.
-effolkronium::random_local rng;
-rng.seed(static_cast<std::mt19937::result_type>(entity.seed(L"age")));
-int replayed_age = rng.get(18, 65); // Same value as entity.get<int>(L"age")
+dasmig::core::rng rng{entity.seed(L"age")};
+int replayed_age = dasmig::core::uniform_int(rng, 18, 65); // Same value as entity.get<int>(L"age")
 ```
 
 The seed hierarchy is fully deterministic:
 
 ```
-generation seed (per-call or generator-level)
-  └─ entity seed          ← entity.seed()
-       └─ local engine
-            ├─ component A seed   ← entity.seed(L"A")
-            ├─ component B seed   ← entity.seed(L"B")
-            └─ ...
+call seed (per call, or drawn from the generator's engine)
+  └─ entity seed = the call seed  ← entity.seed()
+     (attempt k of entity validation: k-th value of rng{call seed}.split("attempt"))
+       └─ rng{entity seed}.split(key), one stream per component key
+            ├─ .split("weight")   the inclusion roll
+            └─ .split("seed")     the component seed (then one per retry)
+                                  ← entity.seed(key); ctx.random() = rng{component seed}
 ```
+
+Because each component's stream is split from the entity seed by its key, adding, removing or reordering components does not change the values of the others.
 
 ## Batch Generation
 
@@ -340,7 +345,8 @@ class rare_trait : public dasmig::component
 
     std::any generate(const dasmig::generation_context& ctx) const override
     {
-        return ctx.random().get<std::wstring>({L"scar", L"tattoo", L"birthmark"});
+        static const std::vector<std::wstring> traits{L"scar", L"tattoo", L"birthmark"};
+        return dasmig::core::pick(ctx.random(), traits);
     }
 
     std::wstring to_string(const std::any& value) const override
@@ -377,6 +383,19 @@ std::wstring text = entity.to_string();
 std::wcout << entity << L'\n';
 ```
 
+### JSON
+
+`to_json()` writes the entity as JSON (UTF-8), the form the WebAssembly layer and the game consume. Values keep their types: integers and numbers stay numbers, `bool` a boolean, strings strings; other types use the component's `to_json()` override, or its `to_string()`.
+
+```cpp
+auto e = eg::instance().generate(42);
+std::string json = e.to_json();
+// {"components":{"name":"Helena","class":"Rogue","age":53,"level":94,...},
+//  "signature":{"seed":"000000000000002a","data":"0000000000000000"}}
+```
+
+Components appear in generation order. The signature is the replay seed in the format every dasmig library uses (`data` is 0: the entity generator has no data of its own). Seeds are strings because JavaScript numbers cannot hold every 64-bit value. `to_json(writer)` writes into an existing `dasmig::core::json_writer`, for composing larger documents.
+
 ## Structured Serialization
 
 `to_map()` returns component values as a `std::map<std::wstring, std::wstring>` mapping keys to their display strings. This is convenient for integration with JSON, XML, or any key–value serialization format.
@@ -402,7 +421,7 @@ auto m = entity.to_map();
 
 ## Concurrent Batch Generation
 
-`generate_batch_async()` generates entities in parallel using `std::async`. Entity seeds are pre-derived sequentially from the engine, then each entity is generated in its own async task. Results are returned in seed order.
+`generate_batch_async()` generates entities in parallel using `std::async`. Entity `i` uses the `i`-th value of `rng{seed}.split("batch")` as its call seed, exactly as `generate_batch()` does, so the two give the same entities for the same seed (or the same engine state). Each entity is generated in its own async task; results are returned in order.
 
 ```cpp
 // Generate 100 entities concurrently.
@@ -429,7 +448,7 @@ class even_age : public dasmig::component
     std::wstring key() const override { return L"age"; }
     std::any generate(const dasmig::generation_context& ctx) const override
     {
-        return ctx.random().get(18, 65);
+        return dasmig::core::uniform_int(ctx.random(), 18, 65);
     }
     bool validate(const std::any& value) const override
     {
@@ -521,7 +540,7 @@ class warrior_title : public dasmig::component
     {
         static const std::vector<std::wstring> titles{
             L"Warlord", L"Champion", L"Berserker"};
-        return ctx.random().get(titles);
+        return dasmig::core::pick(ctx.random(), titles);
     }
     bool should_generate(const dasmig::generation_context& ctx) const override
     {
@@ -564,7 +583,7 @@ gen.add(std::make_unique<dasmig::choice_component<std::wstring>>(
 
 ### range_component&lt;T&gt;
 
-Uniform random in a numeric range `[lo, hi]`. Restricted to arithmetic types.
+Uniform random in a numeric range: `[lo, hi]` for integer types, `[lo, hi)` for floating-point types (`bool` is not allowed).
 
 ```cpp
 gen.add(std::make_unique<dasmig::range_component<int>>(L"age", 18, 65));
@@ -588,7 +607,7 @@ A CTAD deduction guide is provided for stack-allocated usage where `make_unique`
 
 ### weighted_choice_component&lt;T&gt;
 
-Picks from a list of values using per-option weights. Weights are relative (they don't need to sum to 1.0). A weight of 0 means the option is never selected.
+Picks from a list of values using per-option weights. Weights are relative (they don't need to sum to 1.0). A weight of 0 means the option is never selected; negative or non-finite weights are rejected. The weighted choice is dasmig-core's, built once when the component is constructed.
 
 ```cpp
 using rarity_t = dasmig::weighted_choice_component<std::wstring>;
@@ -877,6 +896,36 @@ adapter.spawn_into(prefab, gen.generate());
 | `spawn_into(target, entity)` | Apply mapped components to existing entity |
 | `spawn_batch(vector)` | Spawn multiple entities at once |
 | `clear_mappings()` | Remove all registered mappings |
+
+## Random Numbers in Components
+
+`ctx.random()` is a `dasmig::core::rng` seeded for this component. Draw from it with the dasmig-core functions, which give the same results on every platform (the `std::` distributions do not):
+
+| Need | Call |
+|------|------|
+| Integer in [lo, hi] | `dasmig::core::uniform_int(ctx.random(), lo, hi)` |
+| Real in [lo, hi) | `dasmig::core::uniform_real(ctx.random(), lo, hi)` |
+| Element of a container | `dasmig::core::pick(ctx.random(), values)` (a reference into it) |
+| True with probability p | `dasmig::core::bernoulli(ctx.random(), p)` |
+| Index by weights | `dasmig::core::discrete{weights}(ctx.random())` (build once, reuse) |
+| Normal, log-normal | `dasmig::core::normal(ctx.random(), mean, sd)`, `lognormal(...)` |
+| Shuffle, sample | `dasmig::core::shuffle(ctx.random(), range)`, `sample_indices(...)` |
+
+The algorithms are specified in dasmig-core's usage guide.
+
+## Migrating from v1
+
+Version 2 moves the library onto [dasmig-core](https://github.com/dasmig/dasmig-core).
+
+- **Every generated entity changes.** The engine (xoshiro256\*\*) and the distributions are the core's, so a seed gives the same entity on every compiler, standard library and CPU. Seeds saved with v1 do not reproduce their v1 results. The distributions of the generic components are unchanged (checked against v1 over 20,000 draws).
+- **`ctx.random()` returns `dasmig::core::rng&`** instead of effolkronium's `random_local&`. Replace `ctx.random().get(lo, hi)` with `dasmig::core::uniform_int(ctx.random(), lo, hi)` (or `uniform_real` for floating point), and `*ctx.random().get(values)` with `dasmig::core::pick(ctx.random(), values)` (see Random Numbers in Components).
+- **Full 64-bit seeds.** v1 used a 32-bit `std::mt19937` and cut seeds to 32 bits, so seeds differing only in their high bits gave the same entity.
+- **Components are independent.** Each component draws from a stream split from the entity seed by its key; in v1 adding or removing a component shifted the values of every later one.
+- **`entity::seed()` is the call seed** (or the accepted attempt's), so `generate(e.seed())` replays the entity; in v1 it was a value drawn from the call seed, which could not be passed back.
+- **Batches.** `generate_batch(n, seed)` and `generate_batch_async(n, seed)` give the same entities, and each entity replays alone from its seed. Entity-validation retries no longer consume the batch's seeds.
+- **`range_component<T>`** requires an integer (not `bool`) or floating-point `T`; a float range stays below `hi`. **`weighted_choice_component`** builds its weighted choice once and rejects negative or non-finite weights.
+- **Files:** replace `random.hpp` with `core.hpp` and the `core/` directory, kept next to `entitygen.hpp`.
+- **New:** `entity::to_json()`, `entity::signature()`, `component::to_json()` (and `dasmig::json_value`).
 
 ## Error Reference
 
