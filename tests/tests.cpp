@@ -3061,7 +3061,8 @@ TEST_CASE("stats_observer counts entity retries", "[ext][stats]")
     });
     gen.max_retries(200);
 
-    gen.generate();
+    // Seeded: unseeded, the first attempt passed one time in twenty.
+    (void)gen.generate(1);
 
     REQUIRE(stats->entities_generated == 1);
     REQUIRE(stats->entity_retries > 0);

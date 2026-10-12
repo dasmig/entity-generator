@@ -646,15 +646,15 @@ class entity
     /// @return The formatted string, or empty if the entity is empty.
     [[nodiscard]] std::wstring to_string() const
     {
-        auto parts = _entries
-            | std::views::transform([](const auto& e) {
-                return e.key + L": " + e.display;
-            });
-
-        return std::ranges::fold_left_first(parts,
-            [](std::wstring acc, const std::wstring& part) {
-                return std::move(acc) + L"  " + part;
-            }).value_or(std::wstring{});
+        // A plain loop: std::ranges::fold_left_first is missing from libc++
+        // 18, Apple's libc++ and Emscripten.
+        std::wstring result;
+        for (const auto& e : _entries)
+        {
+            if (!result.empty()) result += L"  ";
+            result += e.key + L": " + e.display;
+        }
+        return result;
     }
 
     /// @brief Stream all component values in generation order.
@@ -1147,7 +1147,9 @@ class eg
     /// Same entities as generate_batch() would give from the same engine
     /// state; each entity is generated in its own async task. Results are
     /// returned in order. If observers are set, the caller is responsible
-    /// for their thread safety.
+    /// for their thread safety. In a WebAssembly build without threads
+    /// (Emscripten without `-pthread`) the tasks run one after another, with
+    /// the same results.
     /// @param count Number of entities to generate.
     /// @return A vector of generated entities.
     [[nodiscard]] std::vector<entity> generate_batch_async(std::size_t count)
@@ -1170,7 +1172,7 @@ class eg
         futures.reserve(count);
         for (const auto entity_seed : batch_seeds(count, call_seed))
         {
-            futures.push_back(std::async(std::launch::async, [this, &refs, entity_seed] {
+            futures.push_back(std::async(async_policy, [this, &refs, entity_seed] {
                 return generate_seeded(refs, entity_seed);
             }));
         }
@@ -1286,6 +1288,14 @@ class eg
     {
         notify_all(_observers, hook, args...);
     }
+
+    // Emscripten without pthreads cannot start threads; deferred tasks give
+    // the same entities, generated on the calling thread.
+#if defined(__EMSCRIPTEN__) && !defined(__EMSCRIPTEN_PTHREADS__)
+    static constexpr std::launch async_policy = std::launch::deferred;
+#else
+    static constexpr std::launch async_policy = std::launch::async;
+#endif
 
     // The call seeds of a batch.
     [[nodiscard]] static std::vector<std::uint64_t> batch_seeds(
