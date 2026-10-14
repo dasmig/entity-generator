@@ -81,7 +81,7 @@ TEST_CASE("entt_adapter spawns entity with mapped components",
         return Age{e.get<int>(L"age")};
     });
 
-    auto entt_entity = adapter.spawn(gen.generate());
+    auto entt_entity = adapter.spawn(gen.generate({}));
 
     REQUIRE(registry.valid(entt_entity));
     REQUIRE(registry.all_of<Name, Age>(entt_entity));
@@ -99,7 +99,7 @@ TEST_CASE("entt_adapter direct map without transform",
     gen.add(std::make_unique<int_component>(L"age", 25));
     adapter.map<int>(L"age");
 
-    auto entt_entity = adapter.spawn(gen.generate());
+    auto entt_entity = adapter.spawn(gen.generate({}));
 
     REQUIRE(registry.get<int>(entt_entity) == 25);
 }
@@ -119,7 +119,7 @@ TEST_CASE("entt_adapter skips unmapped keys",
         return Name{e.get<std::wstring>(L"name")};
     });
 
-    auto entt_entity = adapter.spawn(gen.generate());
+    auto entt_entity = adapter.spawn(gen.generate({}));
 
     REQUIRE(registry.all_of<Name>(entt_entity));
     REQUIRE_FALSE(registry.all_of<Age>(entt_entity));
@@ -144,7 +144,7 @@ TEST_CASE("entt_adapter skips missing keys from weighted components",
         return Title{e.get<std::wstring>(L"title")};
     });
 
-    auto entt_entity = adapter.spawn(gen.generate());
+    auto entt_entity = adapter.spawn(gen.generate({}));
 
     REQUIRE(registry.all_of<Name>(entt_entity));
     // weight 0.0 means "title" is always skipped
@@ -162,7 +162,7 @@ TEST_CASE("entt_adapter spawn_into uses existing entity",
     adapter.map<int>(L"hp");
 
     auto existing = registry.create();
-    adapter.spawn_into(existing, gen.generate());
+    adapter.spawn_into(existing, gen.generate({}));
 
     REQUIRE(registry.get<int>(existing) == 100);
 }
@@ -179,7 +179,7 @@ TEST_CASE("entt_adapter spawn_batch creates multiple entities",
         return Name{e.get<std::wstring>(L"name")};
     });
 
-    auto batch = gen.generate_batch(5);
+    auto batch = gen.generate_batch({.count = 5});
     auto entities = adapter.spawn_batch(batch);
 
     REQUIRE(entities.size() == 5);
@@ -207,7 +207,7 @@ TEST_CASE("entt_adapter multi-key mapper reads multiple keys",
             static_cast<float>(e.get<int>(L"y"))};
     });
 
-    auto entt_entity = adapter.spawn(gen.generate());
+    auto entt_entity = adapter.spawn(gen.generate({}));
 
     auto& pos = registry.get<Position>(entt_entity);
     REQUIRE(pos.x == 10.0f);
@@ -225,7 +225,7 @@ TEST_CASE("entt_adapter clear_mappings removes all mappings",
     adapter.map<int>(L"age");
     adapter.clear_mappings();
 
-    auto entt_entity = adapter.spawn(gen.generate());
+    auto entt_entity = adapter.spawn(gen.generate({}));
 
     // No mappings remain, so no components are emplaced
     REQUIRE_FALSE(registry.all_of<int>(entt_entity));

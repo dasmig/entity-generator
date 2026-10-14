@@ -512,9 +512,9 @@ class weighted_choice_component : public component
 
 /// @brief A generated entity holding component values in registration order.
 ///
-/// Entities are produced by eg::generate() and provide typed access to
+/// Entities are produced by eg::generate and provide typed access to
 /// component values, seed signatures for replay, and serialization.
-/// @see eg::generate()
+/// @see eg::generate
 class entity
 {
   public:
@@ -567,7 +567,8 @@ class entity
 
     /// @brief Retrieve the random seed used to generate this entity.
     ///
-    /// eg::generate(seed()) with the same components reproduces the entity:
+    /// eg::generate(request, seed()) with the same request and setup reproduces
+    /// the entity:
     /// it is the call seed, or the seed of the attempt the entity validator
     /// accepted. Component @c k drew from
     /// `core::rng{seed()}.split(core::to_utf8(k))`.
@@ -804,12 +805,36 @@ class generation_observer
     /// @}
 };
 
+/// @brief Per-call entity generation and selection options.
+///
+/// Defaults select all registered components, generate one entity in a batch,
+/// and accept entities without an entity-level validator. Component validation,
+/// weights, conditions, registration order and the generator's retry policy
+/// still apply. Replay requires the same request and instance setup.
+struct entity_request
+{
+    /// @brief Optional key subset; absent selects all, an empty vector selects none.
+    /// Unknown keys are skipped and registration order is preserved.
+    std::optional<std::vector<std::wstring>> component_keys{};
+
+    /// @brief Optional registered group name, mutually exclusive with component_keys.
+    /// Required by eg::generate_group; also supported by the other generation methods.
+    std::optional<std::wstring> group{};
+
+    /// @brief Number of entities for batch methods (ignored by single-entity methods).
+    std::size_t count{1};
+
+    /// @brief Optional entity validator; false retries the whole entity.
+    /// Concurrent batches require a thread-safe callable and captured state.
+    std::function<bool(const entity&)> validator{};
+};
+
 /// @brief The entity generator — produces entities with configurable components.
 ///
 /// Components are registered by implementing the component interface and
 /// adding them to the generator. Components are generated in registration
 /// order, allowing later components to access earlier ones via context.
-/// @see component, entity, generation_context
+/// @see component, entity, entity_request, generation_context
 class eg
 {
   public:
@@ -943,56 +968,8 @@ class eg
     }
 
     /// @}
-    /// @name Seeding
-    /// @{
-
-    /// @brief Seed the internal random engine.
-    ///
-    /// Subsequent generate() calls without an explicit seed will draw from
-    /// this seeded sequence.
-    /// @param seed_value The seed value.
-    /// @return `*this` for chaining.
-    eg& seed(std::uint64_t seed_value)
-    {
-        _engine.seed(seed_value);
-
-        return *this;
-    }
-
-    /// @brief Reseed the engine with a non-deterministic source.
-    ///
-    /// Subsequent generate() calls will produce non-reproducible results.
-    /// @return `*this` for chaining.
-    eg& unseed()
-    {
-        _engine.unseed();
-
-        return *this;
-    }
-
-    /// @}
     /// @name Validation
     /// @{
-
-    /// @brief Set an entity-level validation function.
-    ///
-    /// After each entity is fully generated, the validator is called. If it
-    /// returns `false`, the entity is re-generated up to max_retries times.
-    /// @param fn Validator callable returning `true` to accept.
-    /// @return `*this` for chaining.
-    eg& set_validator(std::function<bool(const entity&)> fn)
-    {
-        _validator = std::move(fn);
-        return *this;
-    }
-
-    /// @brief Remove the entity-level validation function.
-    /// @return `*this` for chaining.
-    eg& clear_validator()
-    {
-        _validator = nullptr;
-        return *this;
-    }
 
     /// @brief Set the maximum number of retries for validation (default 10).
     ///
@@ -1040,102 +1017,72 @@ class eg
     /// @name Generation
     /// @{
 
-    /// @brief Generate an entity with all registered components.
+    /// @brief Generate an entity using per-call options.
     ///
     /// Draws a call seed from the generator's engine.
+    /// @param request Selection and entity validation options.
     /// @return The generated entity.
     /// @throws std::runtime_error If component or entity validation is exhausted.
-    [[nodiscard]] entity generate()
+    /// @throws std::invalid_argument If both selection fields are set.
+    /// @throws std::out_of_range If the requested group does not exist.
+    [[nodiscard]] entity generate(const entity_request& request)
     {
-        return generate(_engine());
+        const auto refs = resolve_components(request);
+        return generate_seeded(refs, _engine(), request.validator);
     }
 
-    /// @brief Generate an entity with all registered components using a seed.
+    /// @brief Generate an entity using a request and a seed.
     ///
     /// The same seed and components give the same entity on every compiler
     /// and platform. Each component draws from a stream split from the seed
     /// by its key, so adding or removing a component does not change the
     /// others.
-    /// @param call_seed Seed for reproducible results.
+    /// @param request Selection and entity validation options.
+    /// @param call_seed Seed for reproducible results; does not advance the internal engine.
     /// @return The generated entity.
     /// @throws std::runtime_error If validation is exhausted.
-    [[nodiscard]] entity generate(std::uint64_t call_seed) const
-    {
-        return generate_seeded(all_component_refs(), call_seed);
-    }
-
-    /// @brief Generate an entity with only the specified components.
-    ///
-    /// Uses the generator's internal engine. Unknown keys are silently skipped.
-    /// @param component_keys The keys to include.
-    /// @return The generated entity.
-    /// @throws std::runtime_error If validation is exhausted.
-    [[nodiscard]] entity generate(std::span<const std::wstring> component_keys)
-    {
-        return generate(component_keys, _engine());
-    }
-
-    /// @brief Generate an entity with only the specified components using a seed.
-    /// @param component_keys The keys to include.
-    /// @param call_seed Seed for reproducible results.
-    /// @return The generated entity.
-    /// @throws std::runtime_error If validation is exhausted.
-    [[nodiscard]] entity generate(std::span<const std::wstring> component_keys,
+    /// @throws std::invalid_argument If both selection fields are set.
+    /// @throws std::out_of_range If the requested group does not exist.
+    [[nodiscard]] entity generate(const entity_request& request,
                                   std::uint64_t call_seed) const
     {
-        return generate_seeded(filter_components(component_keys), call_seed);
-    }
-
-    /// @brief Generate with an initializer list of keys (convenience overload).
-    [[nodiscard]] entity generate(
-        std::initializer_list<std::wstring> component_keys)
-    {
-        return generate(std::span<const std::wstring>{
-            component_keys.begin(), component_keys.size()});
-    }
-
-    /// @brief Generate with an initializer list of keys and a seed.
-    [[nodiscard]] entity generate(
-        std::initializer_list<std::wstring> component_keys,
-        std::uint64_t call_seed) const
-    {
-        return generate(std::span<const std::wstring>{
-            component_keys.begin(), component_keys.size()}, call_seed);
+        return generate_seeded(resolve_components(request), call_seed,
+                               request.validator);
     }
 
     /// @}
     /// @name Batch Generation
     /// @{
 
-    /// @brief Generate multiple entities with all registered components.
+    /// @brief Generate request.count entities using per-call options.
     ///
-    /// Each entity gets its own call seed from the generator's engine.
-    /// @param count Number of entities to generate.
+    /// Draws one call seed from the generator's engine for the batch.
+    /// @param request Selection, batch count and entity validation options.
     /// @return A vector of generated entities.
-    [[nodiscard]] std::vector<entity> generate_batch(std::size_t count)
+    /// @throws std::invalid_argument If both selection fields are set.
+    /// @throws std::out_of_range If the requested group does not exist.
+    /// @throws std::runtime_error If component or entity validation is exhausted.
+    [[nodiscard]] std::vector<entity> generate_batch(const entity_request& request)
     {
-        return generate_batch(count, _engine());
+        const auto refs = resolve_components(request);
+        return generate_batch_seeded(refs, request, _engine());
     }
 
     /// @brief Generate multiple entities using a seed.
     ///
     /// Entity @c i uses the @c i-th value of `core::rng{call_seed}.split("batch")`
-    /// as its call seed, so the result equals generate_batch_async(count,
-    /// call_seed) and each entity replays with generate(e.seed()).
-    /// @param count Number of entities to generate.
+    /// as its call seed, so the result equals generate_batch_async(request,
+    /// call_seed) and each entity replays with generate(request, e.seed()).
+    /// @param request Selection, batch count and entity validation options.
     /// @param call_seed Seed for reproducible results.
     /// @return A vector of generated entities.
+    /// @throws std::invalid_argument If both selection fields are set.
+    /// @throws std::out_of_range If the requested group does not exist.
+    /// @throws std::runtime_error If component or entity validation is exhausted.
     [[nodiscard]] std::vector<entity> generate_batch(
-        std::size_t count, std::uint64_t call_seed) const
+        const entity_request& request, std::uint64_t call_seed) const
     {
-        const auto refs = all_component_refs();
-        std::vector<entity> entities;
-        entities.reserve(count);
-        for (const auto entity_seed : batch_seeds(count, call_seed))
-        {
-            entities.push_back(generate_seeded(refs, entity_seed));
-        }
-        return entities;
+        return generate_batch_seeded(resolve_components(request), request, call_seed);
     }
 
     /// @}
@@ -1144,45 +1091,36 @@ class eg
 
     /// @brief Generate multiple entities concurrently.
     ///
-    /// Same entities as generate_batch() would give from the same engine
+    /// Same entities as generate_batch(request) would give from the same engine
     /// state; each entity is generated in its own async task. Results are
-    /// returned in order. If observers are set, the caller is responsible
-    /// for their thread safety. In a WebAssembly build without threads
+    /// returned in order. Components, observers and the request's validator
+    /// (including captured state) must be thread-safe. In a WebAssembly build without threads
     /// (Emscripten without `-pthread`) the tasks run one after another, with
     /// the same results.
-    /// @param count Number of entities to generate.
+    /// @param request Selection, batch count and entity validation options.
     /// @return A vector of generated entities.
-    [[nodiscard]] std::vector<entity> generate_batch_async(std::size_t count)
+    /// @throws std::invalid_argument If both selection fields are set.
+    /// @throws std::out_of_range If the requested group does not exist.
+    /// @throws std::runtime_error If component or entity validation is exhausted.
+    [[nodiscard]] std::vector<entity> generate_batch_async(const entity_request& request)
     {
-        return generate_batch_async(count, _engine());
+        const auto refs = resolve_components(request);
+        return generate_batch_async_seeded(refs, request, _engine());
     }
 
     /// @brief Generate multiple entities concurrently using a seed.
     ///
-    /// Gives the same entities as generate_batch(count, call_seed).
-    /// @param count Number of entities to generate.
+    /// Gives the same entities as generate_batch(request, call_seed).
+    /// @param request Selection, batch count and entity validation options.
     /// @param call_seed Seed for reproducible results.
     /// @return A vector of generated entities.
+    /// @throws std::invalid_argument If both selection fields are set.
+    /// @throws std::out_of_range If the requested group does not exist.
+    /// @throws std::runtime_error If component or entity validation is exhausted.
     [[nodiscard]] std::vector<entity> generate_batch_async(
-        std::size_t count, std::uint64_t call_seed) const
+        const entity_request& request, std::uint64_t call_seed) const
     {
-        const auto refs = all_component_refs();
-
-        std::vector<std::future<entity>> futures;
-        futures.reserve(count);
-        for (const auto entity_seed : batch_seeds(count, call_seed))
-        {
-            futures.push_back(std::async(async_policy, [this, &refs, entity_seed] {
-                return generate_seeded(refs, entity_seed);
-            }));
-        }
-
-        std::vector<entity> entities;
-        entities.reserve(count);
-        std::ranges::transform(futures, std::back_inserter(entities),
-            [](auto& f) { return f.get(); });
-
-        return entities;
+        return generate_batch_async_seeded(resolve_components(request), request, call_seed);
     }
 
     /// @}
@@ -1218,33 +1156,29 @@ class eg
     }
 
     /// @brief Generate an entity using a named group.
-    /// @param group_name The group to generate.
+    /// @param request Options with a registered group name.
     /// @return The generated entity.
     /// @throws std::out_of_range If the group does not exist.
-    [[nodiscard]] entity generate_group(const std::wstring& group_name)
+    /// @throws std::invalid_argument If the group is absent or component_keys is set.
+    /// @throws std::runtime_error If component or entity validation is exhausted.
+    [[nodiscard]] entity generate_group(const entity_request& request)
     {
-        if (!has_group(group_name))
-        {
-            throw std::out_of_range("group not found");
-        }
-        return generate_group(group_name, _engine());
+        require_group(request);
+        return generate(request);
     }
 
     /// @brief Generate an entity using a named group with a seed.
-    /// @param group_name The group to generate.
+    /// @param request Options with a registered group name.
     /// @param call_seed Seed for reproducible results.
     /// @return The generated entity.
     /// @throws std::out_of_range If the group does not exist.
-    [[nodiscard]] entity generate_group(const std::wstring& group_name,
+    /// @throws std::invalid_argument If the group is absent or component_keys is set.
+    /// @throws std::runtime_error If component or entity validation is exhausted.
+    [[nodiscard]] entity generate_group(const entity_request& request,
                                         std::uint64_t call_seed) const
     {
-        auto it = _groups.find(group_name);
-        if (it == _groups.end())
-        {
-            throw std::out_of_range("group not found");
-        }
-
-        return generate_seeded(filter_components(it->second), call_seed);
+        require_group(request);
+        return generate(request, call_seed);
     }
 
     /// @}
@@ -1311,7 +1245,8 @@ class eg
     // Attempt 0 uses the call seed itself; attempt k uses the k-th value of
     // core::rng{call_seed}.split("attempt").
     [[nodiscard]] entity generate_seeded(std::span<const component_ref> refs,
-                                         std::uint64_t call_seed) const
+                                         std::uint64_t call_seed,
+                                         const std::function<bool(const entity&)>& validator) const
     {
         notify_all(_observers, &generation_observer::on_before_generate);
         auto attempts = core::rng{call_seed}.split("attempt");
@@ -1326,7 +1261,7 @@ class eg
             if (attempt > 0)
                 notify_all(_observers,
                     &generation_observer::on_after_entity_retry, attempt);
-            if (!_validator || _validator(e))
+            if (!validator || validator(e))
             {
                 accepted = std::move(e);
                 break;
@@ -1429,6 +1364,59 @@ class eg
 
     // --- Component resolution ---------------------------------------------
 
+    static void require_group(const entity_request& request)
+    {
+        if (!request.group)
+            throw std::invalid_argument("generate_group requires a group");
+    }
+
+    [[nodiscard]] std::vector<component_ref> resolve_components(
+        const entity_request& request) const
+    {
+        if (request.group && request.component_keys)
+            throw std::invalid_argument("group and component_keys are mutually exclusive");
+        if (request.group)
+        {
+            const auto it = _groups.find(*request.group);
+            if (it == _groups.end())
+                throw std::out_of_range("group not found");
+            return filter_components(it->second);
+        }
+        return request.component_keys ? filter_components(*request.component_keys)
+                                      : all_component_refs();
+    }
+
+    [[nodiscard]] std::vector<entity> generate_batch_seeded(
+        std::span<const component_ref> refs, const entity_request& request,
+        std::uint64_t call_seed) const
+    {
+        std::vector<entity> entities;
+        entities.reserve(request.count);
+        for (const auto entity_seed : batch_seeds(request.count, call_seed))
+            entities.push_back(generate_seeded(refs, entity_seed, request.validator));
+        return entities;
+    }
+
+    [[nodiscard]] std::vector<entity> generate_batch_async_seeded(
+        std::span<const component_ref> refs, const entity_request& request,
+        std::uint64_t call_seed) const
+    {
+        std::vector<std::future<entity>> futures;
+        futures.reserve(request.count);
+        for (const auto entity_seed : batch_seeds(request.count, call_seed))
+        {
+            futures.push_back(std::async(async_policy, [this, refs, &request, entity_seed] {
+                return generate_seeded(refs, entity_seed, request.validator);
+            }));
+        }
+
+        std::vector<entity> entities;
+        entities.reserve(request.count);
+        std::ranges::transform(futures, std::back_inserter(entities),
+            [](auto& f) { return f.get(); });
+        return entities;
+    }
+
     // Build a component_ref span from the owned component entries.
     [[nodiscard]] std::vector<component_ref> all_component_refs() const
     {
@@ -1479,9 +1467,6 @@ class eg
 
     // Per-component weight overrides (key -> weight).
     std::map<std::wstring, double> _weight_overrides;
-
-    // Entity-level validation function (optional).
-    std::function<bool(const entity&)> _validator;
 
     // Generation lifecycle observers (optional).
     observer_list _observers;

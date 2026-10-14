@@ -26,7 +26,7 @@ namespace dasmig::ext
 ///   adapter.map<Position>(L"pos", [](const dasmig::entity& e) {
 ///       return Position{ e.get<float>(L"x"), e.get<float>(L"y") };
 ///   });
-///   auto flecs_entity = adapter.spawn(gen.generate());
+///   auto flecs_entity = adapter.spawn(gen.generate({}));
 /// @endcode
 /// @see entt_adapter
 class flecs_adapter

@@ -65,7 +65,7 @@ TEST_CASE("flecs_adapter spawns entity with mapped components",
         return Age{e.get<int>(L"age")};
     });
 
-    auto flecs_entity = adapter.spawn(gen.generate());
+    auto flecs_entity = adapter.spawn(gen.generate({}));
 
     REQUIRE(flecs_entity.is_valid());
     REQUIRE(flecs_entity.has<Name>());
@@ -84,7 +84,7 @@ TEST_CASE("flecs_adapter direct map without transform",
     gen.add(std::make_unique<int_component>(L"age", 25));
     adapter.map<int>(L"age");
 
-    auto flecs_entity = adapter.spawn(gen.generate());
+    auto flecs_entity = adapter.spawn(gen.generate({}));
 
     REQUIRE(flecs_entity.get<int>() == 25);
 }
@@ -104,7 +104,7 @@ TEST_CASE("flecs_adapter skips unmapped keys",
         return Name{e.get<std::wstring>(L"name")};
     });
 
-    auto flecs_entity = adapter.spawn(gen.generate());
+    auto flecs_entity = adapter.spawn(gen.generate({}));
 
     REQUIRE(flecs_entity.has<Name>());
     REQUIRE_FALSE(flecs_entity.has<Age>());
@@ -121,7 +121,7 @@ TEST_CASE("flecs_adapter spawn_into uses existing entity",
     adapter.map<int>(L"hp");
 
     auto existing = world.entity();
-    adapter.spawn_into(existing, gen.generate());
+    adapter.spawn_into(existing, gen.generate({}));
 
     REQUIRE(existing.get<int>() == 100);
 }
@@ -138,7 +138,7 @@ TEST_CASE("flecs_adapter spawn_batch creates multiple entities",
         return Name{e.get<std::wstring>(L"name")};
     });
 
-    auto batch = gen.generate_batch(5);
+    auto batch = gen.generate_batch({.count = 5});
     auto entities = adapter.spawn_batch(batch);
 
     REQUIRE(entities.size() == 5);
@@ -165,7 +165,7 @@ TEST_CASE("flecs_adapter multi-key mapper reads multiple keys",
             static_cast<float>(e.get<int>(L"y"))};
     });
 
-    auto flecs_entity = adapter.spawn(gen.generate());
+    auto flecs_entity = adapter.spawn(gen.generate({}));
 
     const auto& pos = flecs_entity.get<Position>();
     REQUIRE(pos.x == 10.0f);
@@ -183,7 +183,7 @@ TEST_CASE("flecs_adapter clear_mappings removes all mappings",
     adapter.map<int>(L"age");
     adapter.clear_mappings();
 
-    auto flecs_entity = adapter.spawn(gen.generate());
+    auto flecs_entity = adapter.spawn(gen.generate({}));
 
     REQUIRE_FALSE(flecs_entity.has<int>());
 }

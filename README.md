@@ -21,7 +21,9 @@
 
 - **Generic Components** — Ready-made templates for common patterns: `constant_component<T>`, `choice_component<T>`, `range_component<T>`, `callback_component`, and `weighted_choice_component<T>`. All accept an optional custom formatter.
 
-- **Randomness & Replay** — Deterministic seeding at per-call and generator level. Every entity and component stores its seed for full replay via seed signatures; `generate(e.seed())` reproduces an entity.
+- **Request-First API** — `entity_request` carries component selection, group, batch count, and entity validation for each call. Generation methods accept `(request)` or `(request, seed)`; setup stays on the instance.
+
+- **Randomness & Replay** — Explicit per-call seeds and caller-owned deterministic sequences. Every entity and component stores its seed for full replay via seed signatures; `generate(request, e.seed())` reproduces an entity with the same request and setup.
 
 - **Identical Everywhere** — A seed gives the same entity on every compiler, standard library and CPU (GCC, Clang, MSVC, Emscripten; x86-64 and ARM64), checked by known-answer tests. Each component draws from its own stream, so adding a component does not change the others.
 
@@ -102,17 +104,26 @@ eg::instance()
     .add(std::make_unique<age>());
 
 // Generate and stream.
-std::wcout << eg::instance().generate() << std::endl;
+std::wcout << eg::instance().generate({}) << std::endl;
 // e.g. "class: Mage  age: 34"
 
 // Typed access.
-auto entity = eg::instance().generate();
+auto entity = eg::instance().generate({});
 std::wstring cls = entity.get<std::wstring>(L"class");
 int char_age = entity.get<int>(L"age");
 
 // Reproducible with a seed.
-auto seeded = eg::instance().generate(42);
+auto seeded = eg::instance().generate({}, 42);
+
+// Reusable per-call selection.
+dasmig::entity_request request{
+    .component_keys = std::vector<std::wstring>{L"class"}};
+auto partial = eg::instance().generate(request, 42);
+request.count = 3;
+auto batch = eg::instance().generate_batch(request, 42);
 ```
+
+The positional generation overloads and generator `seed` / `unseed` and validator setters have been removed. See [Migrating to the request-first API](doc/usage.md#migrating-to-the-request-first-api).
 
 For the complete feature guide — component dependencies, custom types, seed signatures, batch generation, groups, weights, validation, event hooks, extensions, and more — see the **[Usage Guide](doc/usage.md)**.
 
@@ -126,6 +137,9 @@ make
 
 # Tests
 make test
+
+# Targeted API, replay, selection, and validation tests (after building)
+./build/test_runner "[request],[seed],[batch],[group],[validation],[kat]"
 
 # Code coverage
 make coverage
