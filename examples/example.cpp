@@ -176,20 +176,21 @@ int main()
     std::wcout << L"--- Full entities ---\n";
     for (std::size_t i = 0; i < 5; i++)
     {
-        std::wcout << dasmig::eg::instance().generate() << L'\n';
+        std::wcout << dasmig::eg::instance().generate({}) << L'\n';
     }
 
     // Generate entities with only specific components.
     std::wcout << L"\n--- Name and class only ---\n";
+    const dasmig::entity_request name_and_class{
+        .component_keys = std::vector<std::wstring>{L"name", L"class"}};
     for (std::size_t i = 0; i < 5; i++)
     {
-        std::wcout << dasmig::eg::instance().generate({L"name", L"class"})
-                   << L'\n';
+        std::wcout << dasmig::eg::instance().generate(name_and_class) << L'\n';
     }
 
     // Typed retrieval.
     std::wcout << L"\n--- Typed access ---\n";
-    auto entity = dasmig::eg::instance().generate();
+    auto entity = dasmig::eg::instance().generate({});
     std::wcout << L"Name:     " << entity.get<std::wstring>(L"name") << L'\n';
     std::wcout << L"Class:    " << entity.get<std::wstring>(L"class") << L'\n';
     std::wcout << L"Age:      " << entity.get<int>(L"age") << L'\n';
@@ -207,32 +208,31 @@ int main()
 
     // Reproducible generation with per-call seed.
     std::wcout << L"\n--- Seeded (same seed = same result) ---\n";
-    std::wcout << dasmig::eg::instance().generate(42) << L'\n';
-    std::wcout << dasmig::eg::instance().generate(42) << L'\n';
+    std::wcout << dasmig::eg::instance().generate({}, 42) << L'\n';
+    std::wcout << dasmig::eg::instance().generate({}, 42) << L'\n';
 
-    // Generator-level seed for deterministic sequences.
-    std::wcout << L"\n--- Generator seeded sequence ---\n";
-    dasmig::eg::instance().seed(123);
-    std::wcout << dasmig::eg::instance().generate() << L'\n';
-    std::wcout << dasmig::eg::instance().generate() << L'\n';
-    dasmig::eg::instance().unseed();
+    // Caller-owned seeds for deterministic sequences.
+    std::wcout << L"\n--- Caller seeded sequence ---\n";
+    dasmig::core::rng seeds{123};
+    std::wcout << dasmig::eg::instance().generate({}, seeds()) << L'\n';
+    std::wcout << dasmig::eg::instance().generate({}, seeds()) << L'\n';
 
     // Selective generation with safe dependency (greeting without name).
     std::wcout << L"\n--- Greeting without name (safe fallback) ---\n";
-    std::wcout << dasmig::eg::instance().generate({L"greeting"}) << L'\n';
+    std::wcout << dasmig::eg::instance().generate({.component_keys = std::vector<std::wstring>{L"greeting"}}) << L'\n';
 
     // Entity to_string().
     std::wcout << L"\n--- Entity to_string ---\n";
-    std::wcout << dasmig::eg::instance().generate().to_string() << L'\n';
+    std::wcout << dasmig::eg::instance().generate({}).to_string() << L'\n';
 
     // Entity to_json(): typed values and the seed, as UTF-8 (widened here
     // because this example prints with std::wcout).
     std::wcout << L"\n--- Entity to_json ---\n";
-    std::wcout << dasmig::core::from_utf8(dasmig::eg::instance().generate(42).to_json()) << L'\n';
+    std::wcout << dasmig::core::from_utf8(dasmig::eg::instance().generate({}, 42).to_json()) << L'\n';
 
     // Batch generation.
     std::wcout << L"\n--- Batch generation (3 entities) ---\n";
-    auto batch = dasmig::eg::instance().generate_batch(3);
+    auto batch = dasmig::eg::instance().generate_batch({.count = 3});
     for (const auto& e : batch)
     {
         std::wcout << e << L'\n';
@@ -241,17 +241,20 @@ int main()
     // Component groups.
     std::wcout << L"\n--- Component groups ---\n";
     dasmig::eg::instance().add_group(L"identity", {L"name", L"class"});
-    std::wcout << dasmig::eg::instance().generate_group(L"identity") << L'\n';
+    const dasmig::entity_request identity{.group = L"identity", .count = 3};
+    std::wcout << dasmig::eg::instance().generate_group(identity) << L'\n';
+    for (const auto& e : dasmig::eg::instance().generate_batch(identity, 42))
+        std::wcout << e << L'\n';
     dasmig::eg::instance().remove_group(L"identity");
 
     // Entity validation: only accept entities where age > 30.
     std::wcout << L"\n--- Entity validation (age > 30) ---\n";
-    dasmig::eg::instance().set_validator([](const dasmig::entity& e) {
-        return e.get<int>(L"age") > 30;
-    });
-    auto validated = dasmig::eg::instance().generate();
+    const dasmig::entity_request adult{
+        .validator = [](const dasmig::entity& e) {
+            return e.get<int>(L"age") > 30;
+        }};
+    auto validated = dasmig::eg::instance().generate(adult);
     std::wcout << L"Age: " << validated.get<int>(L"age") << L'\n';
-    dasmig::eg::instance().clear_validator();
 
     // Generation observer: hook into lifecycle events.
     class log_observer : public dasmig::generation_observer
@@ -271,7 +274,7 @@ int main()
     std::wcout << L"\n--- Observer hooks ---\n";
     dasmig::eg::instance().add_observer(
         std::make_shared<log_observer>());
-    (void)dasmig::eg::instance().generate({L"name", L"class"});
+    (void)dasmig::eg::instance().generate(name_and_class);
     dasmig::eg::instance().clear_observers();
 
     // Conditional component: only generates when "class" is "Warrior".
@@ -305,7 +308,7 @@ int main()
     dasmig::eg::instance().add(std::make_unique<warrior_title>());
     for (std::size_t i = 0; i < 6; i++)
     {
-        auto e = dasmig::eg::instance().generate({L"class", L"title"});
+        auto e = dasmig::eg::instance().generate({.component_keys = std::vector<std::wstring>{L"class", L"title"}});
         std::wcout << e.get<std::wstring>(L"class");
         if (e.has(L"title"))
         {
@@ -317,7 +320,7 @@ int main()
 
     // Structured serialization: to_map().
     std::wcout << L"\n--- Structured serialization (to_map) ---\n";
-    auto mapped = dasmig::eg::instance().generate({L"name", L"class", L"age"});
+    auto mapped = dasmig::eg::instance().generate({.component_keys = std::vector<std::wstring>{L"name", L"class", L"age"}});
     for (const auto& [key, value] : mapped.to_map())
     {
         std::wcout << key << L" = " << value << L'\n';
@@ -325,7 +328,7 @@ int main()
 
     // Concurrent batch generation.
     std::wcout << L"\n--- Concurrent batch (10 entities) ---\n";
-    auto async_batch = dasmig::eg::instance().generate_batch_async(10);
+    auto async_batch = dasmig::eg::instance().generate_batch_async({.count = 10});
     for (const auto& e : async_batch)
     {
         std::wcout << e << L'\n';
@@ -333,8 +336,8 @@ int main()
 
     // Seeded concurrent batch (deterministic).
     std::wcout << L"\n--- Seeded concurrent batch ---\n";
-    auto ab1 = dasmig::eg::instance().generate_batch_async(3, 42);
-    auto ab2 = dasmig::eg::instance().generate_batch_async(3, 42);
+    auto ab1 = dasmig::eg::instance().generate_batch_async({.count = 3}, 42);
+    auto ab2 = dasmig::eg::instance().generate_batch_async({.count = 3}, 42);
     for (std::size_t i = 0; i < ab1.size(); i++)
     {
         std::wcout << L"Match: "
@@ -379,13 +382,13 @@ int main()
 
     for (std::size_t i = 0; i < 5; i++)
     {
-        std::wcout << item_gen.generate() << L'\n';
+        std::wcout << item_gen.generate({}) << L'\n';
     }
 
     // Generation statistics observer.
     auto stats = std::make_shared<dasmig::ext::stats_observer>();
     dasmig::eg::instance().add_observer(stats);
-    (void)dasmig::eg::instance().generate_batch(10);
+    (void)dasmig::eg::instance().generate_batch({.count = 10});
     std::wcout << L'\n' << stats->report();
     dasmig::eg::instance().remove_observer(stats);
     // Component-level validation with retries.
@@ -406,14 +409,14 @@ int main()
         dasmig::eg gen;
         gen.add(std::make_unique<even_component>());
         gen.max_retries(50);
-        auto e = gen.generate();
+        auto e = gen.generate({});
         std::wcout << L"Even value: " << e.get<int>(L"even") << L'\n';
     }
 
     // Entity keys and seed inspection.
     std::wcout << L"\n--- Keys and seeds ---\n";
     {
-        auto e = dasmig::eg::instance().generate();
+        auto e = dasmig::eg::instance().generate({});
         std::wcout << L"Entity seed: " << e.seed() << L'\n';
         std::wcout << L"Size: " << e.size() << L" components\n";
         for (const auto& k : e.keys())
@@ -427,7 +430,7 @@ int main()
         auto log = std::make_shared<dasmig::ext::stats_observer>();
         dasmig::eg::instance().add_observer(stats2);
         dasmig::eg::instance().add_observer(log);
-        (void)dasmig::eg::instance().generate();
+        (void)dasmig::eg::instance().generate({});
         std::wcout << L"Stats entities: " << stats2->entities_generated
                    << L", Log entities: " << log->entities_generated << L'\n';
         dasmig::eg::instance().clear_observers();
@@ -439,7 +442,7 @@ int main()
         dasmig::eg gen;
         gen.add(std::make_unique<dasmig::constant_component<int>>(L"x", 1));
         gen.weight(L"x", 0.0); // exclude after registration
-        auto e = gen.generate();
+        auto e = gen.generate({});
         std::wcout << L"Has x: " << (e.has(L"x") ? L"yes" : L"no") << L'\n';
     }
 
@@ -449,7 +452,7 @@ int main()
         dasmig::eg local;
         local.add(std::make_unique<dasmig::constant_component<std::wstring>>(
             L"msg", L"thread-local"));
-        auto e = local.generate();
+        auto e = local.generate({});
         std::wcout << e << L'\n';
     }
 
@@ -458,7 +461,7 @@ int main()
     try
     {
         dasmig::eg gen;
-        auto e = gen.generate();
+        auto e = gen.generate({});
         (void)e.get<int>(L"nonexistent"); // throws
     }
     catch (const std::out_of_range& ex)

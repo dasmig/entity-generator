@@ -30,6 +30,7 @@ This guide covers every feature of the entity-generator library in detail. For a
 <li><a href="#ecs-integration-entt">ECS Integration: EnTT</a></li>
 <li><a href="#ecs-integration-flecs">ECS Integration: Flecs</a></li>
 <li><a href="#random-numbers-in-components">Random Numbers in Components</a></li>
+<li><a href="#migrating-to-the-request-first-api">Migrating to the Request-First API</a></li>
 <li><a href="#migrating-from-v1">Migrating from v1</a></li>
 <li><a href="#error-reference">Error Reference</a></li>
 </ul>
@@ -87,23 +88,33 @@ eg::instance()
     .add(std::make_unique<age>());
 
 // Generate an entity with all registered components.
-auto entity = eg::instance().generate();
+auto entity = eg::instance().generate({});
 
 // Generate an entity with only specific components.
-auto partial = eg::instance().generate({L"class"});
+auto partial = eg::instance().generate({.component_keys = std::vector<std::wstring>{L"class"}});
 
 // Output to stream.
-std::wcout << eg::instance().generate() << std::endl;
+std::wcout << eg::instance().generate({}) << std::endl;
 
 // Generate with a seed for reproducible results.
-auto seeded = eg::instance().generate(42);
+auto seeded = eg::instance().generate({}, 42);
 
-// Seed the generator for a deterministic sequence.
-eg::instance().seed(123);
-auto first  = eg::instance().generate();
-auto second = eg::instance().generate();
-eg::instance().unseed();
+// Keep deterministic sequence state in the caller, not the generator.
+dasmig::core::rng seeds{123};
+auto first  = eg::instance().generate({}, seeds());
+auto second = eg::instance().generate({}, seeds());
 ```
+
+Every generation method accepts a `const dasmig::entity_request&` first, with an optional explicit `std::uint64_t` seed second. Pass `{}` for default generation. Seeded overloads are `const` and do not advance the instance's internal entropy-seeded engine. Reuse or copy a request to apply the same choices to single, group, synchronous-batch, and concurrent-batch generation.
+
+| Request field | Default | Behavior |
+|---|---|---|
+| `component_keys` | `std::nullopt` | All registered components; an explicitly supplied empty `std::vector<std::wstring>{}` selects none. Unknown keys are skipped, duplicates do not duplicate components, and registration order is preserved. |
+| `group` | `std::nullopt` | Select a registered group instead of `component_keys`; supported by all generation methods and required by `generate_group`. Setting both selectors throws `std::invalid_argument`; an unknown group throws `std::out_of_range`. |
+| `count` | `1` | Number of entities for batch methods; `0` returns an empty vector. Single-entity methods ignore it. |
+| `validator` | Empty callable | Accept all entities after component validation. Supply a callback to validate each entity and retry on rejection. |
+
+The request owns its keys and group name. Registration, named-group definitions, component weights, observers, and retry policy remain instance-level setup. The entity generator loads no resources of its own; any resource loading inside user components remains their setup, not a request field. A request never changes the instance's selection or validator for subsequent calls.
 
 **Behavior notes:**
 - `add()` with a key that already exists **replaces** the component in place, preserving registration order. Any existing weight override for that key persists.
@@ -113,7 +124,7 @@ eg::instance().unseed();
 ## Typed Retrieval
 
 ```cpp
-auto entity = eg::instance().generate();
+auto entity = eg::instance().generate({});
 
 // Access values with their original types.
 std::wstring char_class = entity.get<std::wstring>(L"class");
@@ -233,12 +244,12 @@ class position : public dasmig::component
 Every generated entity and component stores the random seed that produced it. This enables replay, debugging, and logging. Results are identical on every compiler, standard library and CPU (dasmig-core), so a seed logged on one machine replays on another.
 
 ```cpp
-auto entity = eg::instance().generate();
+auto entity = eg::instance().generate({});
 
-// The entity-level seed: generate(seed) with the same components
+// The entity-level seed: generate(request, seed) with the same selection
 // reproduces the entity.
 std::uint64_t entity_seed = entity.seed();
-auto again = eg::instance().generate(entity_seed);
+auto again = eg::instance().generate({}, entity_seed);
 
 // Retrieve the seed used for a specific component.
 std::uint64_t age_seed = entity.seed(L"age");
@@ -272,7 +283,7 @@ Generate multiple entities in a single call:
 
 ```cpp
 // Generate 10 entities with all registered components.
-auto batch = eg::instance().generate_batch(10);
+auto batch = eg::instance().generate_batch({.count = 10});
 
 for (const auto& e : batch)
 {
@@ -280,7 +291,7 @@ for (const auto& e : batch)
 }
 
 // Seeded batch for deterministic results.
-auto seeded_batch = eg::instance().generate_batch(10, 42);
+auto seeded_batch = eg::instance().generate_batch({.count = 10}, 42);
 ```
 
 ## Component Groups
@@ -302,10 +313,10 @@ eg::instance()
     .add_group(L"combat", {L"class", L"level", L"stats"});
 
 // Generate using a group.
-auto fighter = eg::instance().generate_group(L"combat");
+auto fighter = eg::instance().generate_group({.group = L"combat"});
 
 // Seeded group generation.
-auto seeded = eg::instance().generate_group(L"combat", 42);
+auto seeded = eg::instance().generate_group({.group = L"combat"}, 42);
 
 // Check and remove groups.
 if (eg::instance().has_group(L"identity")) { /* ... */ }
@@ -324,8 +335,7 @@ for (int i = 0; i < 4; ++i)
     threads.emplace_back([&](int id) {
         dasmig::eg gen;
         gen.add(std::make_unique<name>(/* … */));
-        gen.seed(id);
-        auto e = gen.generate();
+        auto e = gen.generate({}, static_cast<std::uint64_t>(id));
     }, i);
 }
 ```
@@ -373,7 +383,7 @@ eg::instance().weight(L"rare_trait", 0.8);
 Convert an entity to a formatted string with `to_string()`. Each component is rendered as `"key: display"` separated by two spaces. The output matches `operator<<`.
 
 ```cpp
-auto entity = eg::instance().generate();
+auto entity = eg::instance().generate({});
 
 // Get the formatted string.
 std::wstring text = entity.to_string();
@@ -388,7 +398,7 @@ std::wcout << entity << L'\n';
 `to_json()` writes the entity as JSON (UTF-8), the form the WebAssembly layer and the game consume. Values keep their types: integers and numbers stay numbers, `bool` a boolean, strings strings; other types use the component's `to_json()` override, or its `to_string()`.
 
 ```cpp
-auto e = eg::instance().generate(42);
+auto e = eg::instance().generate({}, 42);
 std::string json = e.to_json();
 // {"components":{"name":"Helena","class":"Rogue","age":53,"level":94,...},
 //  "signature":{"seed":"000000000000002a","data":"0000000000000000"}}
@@ -401,7 +411,7 @@ Components appear in generation order. The signature is the replay seed in the f
 `to_map()` returns component values as a `std::map<std::wstring, std::wstring>` mapping keys to their display strings. This is convenient for integration with JSON, XML, or any key–value serialization format.
 
 ```cpp
-auto entity = eg::instance().generate();
+auto entity = eg::instance().generate({});
 auto m = entity.to_map();
 // m["name"] = "Alice", m["class"] = "Mage", m["age"] = "34"
 
@@ -421,19 +431,19 @@ auto m = entity.to_map();
 
 ## Concurrent Batch Generation
 
-`generate_batch_async()` generates entities in parallel using `std::async`. Entity `i` uses the `i`-th value of `rng{seed}.split("batch")` as its call seed, exactly as `generate_batch()` does, so the two give the same entities for the same seed (or the same engine state). Each entity is generated in its own async task; results are returned in order.
+`generate_batch_async(request)` generates entities in parallel using `std::async`. Entity `i` uses the `i`-th value of `rng{seed}.split("batch")` as its call seed, exactly as `generate_batch(request)` does, so the two give the same entities for the same request and seed. Each entity is generated in its own async task; results are returned in order.
 
 ```cpp
 // Generate 100 entities concurrently.
-auto batch = eg::instance().generate_batch_async(100);
+auto batch = eg::instance().generate_batch_async({.count = 100});
 
 // Seeded: deterministic regardless of thread scheduling.
-auto batch1 = eg::instance().generate_batch_async(50, 42);
-auto batch2 = eg::instance().generate_batch_async(50, 42);
+auto batch1 = eg::instance().generate_batch_async({.count = 50}, 42);
+auto batch2 = eg::instance().generate_batch_async({.count = 50}, 42);
 // batch1[i] == batch2[i] for all i
 ```
 
-Entity-level validation applies to each concurrent task independently. If an observer is set, the caller is responsible for its thread safety (hooks fire from multiple threads concurrently).
+Entity-level validation applies to each concurrent task independently. Observers, components, the validator callable and any captured state must be safe for concurrent invocation. Do not mutate instance setup or the request while generation is running. On WebAssembly without threads, tasks run sequentially with identical results.
 
 ## Validation Hooks
 
@@ -461,16 +471,16 @@ class even_age : public dasmig::component
 };
 ```
 
-**Entity-level:** Set a callback on the generator. If it returns `false`, the entire entity is re-generated up to `max_retries` additional times.
+**Entity-level:** Supply a callback in the request. If it returns `false`, the entire entity is re-generated up to `max_retries` additional times. It applies only to calls using that request.
 
 ```cpp
-eg::instance().set_validator([](const dasmig::entity& e) {
-    return e.get<int>(L"age") > 30;
-});
+const dasmig::entity_request adult{
+    .validator = [](const dasmig::entity& e) {
+        return e.get<int>(L"age") > 30;
+    }};
 
-auto e = eg::instance().generate(); // age is guaranteed > 30
-
-eg::instance().clear_validator(); // remove the validator
+auto e = eg::instance().generate(adult); // age is guaranteed > 30
+auto any_age = eg::instance().generate({}); // no entity-level validator
 ```
 
 Configure the retry limit (default 10) for both levels:
@@ -500,7 +510,7 @@ class log_observer : public dasmig::generation_observer
 
 auto obs = std::make_shared<log_observer>();
 eg::instance().add_observer(obs);
-eg::instance().generate(); // prints hook messages
+eg::instance().generate({}); // prints hook messages
 eg::instance().remove_observer(obs);
 
 // Or remove all observers at once.
@@ -631,7 +641,7 @@ gen.add(std::make_unique<dasmig::constant_component<int, decltype(fmt)>>(
 ## Entity Introspection
 
 ```cpp
-auto entity = eg::instance().generate();
+auto entity = eg::instance().generate({});
 
 // Number of component values.
 std::size_t n = entity.size();
@@ -687,7 +697,7 @@ Tracks comprehensive generation statistics: counts, timing, per-component breakd
 auto stats = std::make_shared<dasmig::ext::stats_observer>();
 gen.add_observer(stats);
 
-gen.generate_batch(100);
+gen.generate_batch({.count = 100});
 
 std::wcout << L"Entities:   " << stats->entities_generated  << L'\n'
            << L"Components: " << stats->components_generated << L'\n'
@@ -819,12 +829,12 @@ adapter.map<Position>(L"x", [](const dasmig::entity& e) {
 });
 
 // Spawn
-auto entt_entity = adapter.spawn(gen.generate());
+auto entt_entity = adapter.spawn(gen.generate({}));
 registry.get<Name>(entt_entity);     // Name{"Alice"}
 registry.get<Position>(entt_entity); // Position{...}
 
 // Batch spawn
-auto batch = gen.generate_batch(100);
+auto batch = gen.generate_batch({.count = 100});
 auto entities = adapter.spawn_batch(batch); // 100 EnTT entities
 ```
 
@@ -840,7 +850,7 @@ adapter.map<int>(L"hp"); // any_cast<int> directly emplaced
 ```cpp
 auto prefab = registry.create();
 registry.emplace<some_tag>(prefab);
-adapter.spawn_into(prefab, gen.generate()); // adds mapped components
+adapter.spawn_into(prefab, gen.generate({})); // adds mapped components
 ```
 
 **Skipped components** (weight = 0, conditional = false) are silently ignored — no EnTT component is emplaced for that key.
@@ -874,16 +884,16 @@ adapter.map<Position>(L"x", [](const dasmig::entity& e) {
     return Position{e.get<float>(L"x"), e.get<float>(L"y")};
 });
 
-auto flecs_entity = adapter.spawn(gen.generate());
+auto flecs_entity = adapter.spawn(gen.generate({}));
 flecs_entity.get<Name>();     // const Name&
 flecs_entity.get<Position>(); // const Position&
 
 // Batch spawn
-auto entities = adapter.spawn_batch(gen.generate_batch(100));
+auto entities = adapter.spawn_batch(gen.generate_batch({.count = 100}));
 
 // Spawn into existing entity
 auto prefab = world.entity();
-adapter.spawn_into(prefab, gen.generate());
+adapter.spawn_into(prefab, gen.generate({}));
 ```
 
 **API summary** (identical for both adapters):
@@ -913,6 +923,24 @@ adapter.spawn_into(prefab, gen.generate());
 
 The algorithms are specified in dasmig-core's usage guide.
 
+## Migrating to the Request-First API
+
+Generation now has two forms for each established method: `(request)` and `(request, seed)`. The old positional overloads are removed, not retained as compatibility wrappers.
+
+| Previous call | Request-first call |
+|---|---|
+| `gen.generate()` | `gen.generate({})` |
+| `gen.generate(seed)` | `gen.generate({}, seed)` |
+| `gen.generate({L"a", L"b"}, seed)` | `gen.generate({.component_keys = std::vector<std::wstring>{L"a", L"b"}}, seed)` |
+| `gen.generate_batch(n, seed)` | `gen.generate_batch({.count = n}, seed)` |
+| `gen.generate_batch_async(n, seed)` | `gen.generate_batch_async({.count = n}, seed)` |
+| `gen.generate_group(L"identity", seed)` | `gen.generate_group({.group = L"identity"}, seed)` |
+| `gen.set_validator(fn)` followed by generation | `gen.generate({.validator = fn})` |
+
+`seed`, `unseed`, `set_validator`, and `clear_validator` no longer exist on `eg`. Use a caller-owned `dasmig::core::rng` for a deterministic sequence of call seeds, as shown under Registering and Generating, or a seeded batch. Keep `max_retries`, observers, registration, group definitions, and weights on the instance.
+
+Seeded outputs, component behavior, and batch seed derivation are unchanged from the previous dasmig-core-based API when the request expresses the same choices. Replay an entity with `gen.generate(request, entity.seed())`, preserving the selection, validator, and instance setup. A seed signature records the seed, not the request or the registered components.
+
 ## Migrating from v1
 
 Version 2 moves the library onto [dasmig-core](https://github.com/dasmig/dasmig-core).
@@ -921,8 +949,8 @@ Version 2 moves the library onto [dasmig-core](https://github.com/dasmig/dasmig-
 - **`ctx.random()` returns `dasmig::core::rng&`** instead of effolkronium's `random_local&`. Replace `ctx.random().get(lo, hi)` with `dasmig::core::uniform_int(ctx.random(), lo, hi)` (or `uniform_real` for floating point), and `*ctx.random().get(values)` with `dasmig::core::pick(ctx.random(), values)` (see Random Numbers in Components).
 - **Full 64-bit seeds.** v1 used a 32-bit `std::mt19937` and cut seeds to 32 bits, so seeds differing only in their high bits gave the same entity.
 - **Components are independent.** Each component draws from a stream split from the entity seed by its key; in v1 adding or removing a component shifted the values of every later one.
-- **`entity::seed()` is the call seed** (or the accepted attempt's), so `generate(e.seed())` replays the entity; in v1 it was a value drawn from the call seed, which could not be passed back.
-- **Batches.** `generate_batch(n, seed)` and `generate_batch_async(n, seed)` give the same entities, and each entity replays alone from its seed. Entity-validation retries no longer consume the batch's seeds.
+- **`entity::seed()` is the call seed** (or the accepted attempt's), so `generate(request, e.seed())` replays the entity; in v1 it was a value drawn from the call seed, which could not be passed back.
+- **Batches.** `generate_batch(request, seed)` and `generate_batch_async(request, seed)` give the same entities, and each entity replays alone from its seed. Entity-validation retries no longer consume the batch's seeds.
 - **`range_component<T>`** requires an integer (not `bool`) or floating-point `T`; a float range stays below `hi`. **`weighted_choice_component`** builds its weighted choice once and rejects negative or non-finite weights.
 - **Files:** replace `random.hpp` with `core.hpp` and the `core/` directory, kept next to `entitygen.hpp`.
 - **New:** `entity::to_json()`, `entity::signature()`, `component::to_json()` (and `dasmig::json_value`).
@@ -936,9 +964,11 @@ The library throws standard exceptions. No custom exception types are used.
 | `std::out_of_range` | `entity::get<T>(key)`, `entity::get_any(key)` | Key not present in the entity |
 | `std::out_of_range` | `entity::seed(key)` | Component key not found |
 | `std::out_of_range` | `eg::weight(key, value)` | Component not registered |
-| `std::out_of_range` | `eg::generate_group(name)` | Group not found |
-| `std::runtime_error` | `eg::generate()` (all overloads) | Component validation exhausted after `max_retries` |
-| `std::runtime_error` | `eg::generate()` (all overloads) | Entity validation exhausted after `max_retries` |
+| `std::out_of_range` | Any generation method with `request.group` | Group not found |
+| `std::invalid_argument` | Any generation method | Both `request.group` and `request.component_keys` are set |
+| `std::invalid_argument` | `eg::generate_group(request)` | No group specified |
+| `std::runtime_error` | Any generation method | Component validation exhausted after `max_retries` |
+| `std::runtime_error` | Any generation method | Entity validation exhausted after `max_retries` |
 | `std::invalid_argument` | `choice_component` constructor | Empty choices vector |
 | `std::invalid_argument` | `weighted_choice_component` constructor | Empty options vector or all weights are zero |
 | `std::bad_any_cast` | `entity::get<T>(key)`, `generation_context::get<T>(key)` | Type mismatch on the stored value |

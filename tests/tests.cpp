@@ -6,6 +6,34 @@
 #include <set>
 #include <sstream>
 
+template <typename T>
+concept legacy_generation_api =
+    requires(T& gen) { gen.generate(); } ||
+    requires(T& gen) { gen.generate(std::uint64_t{42}); } ||
+    requires(T& gen, std::span<const std::wstring> keys) { gen.generate(keys); } ||
+    requires(T& gen) { gen.generate_batch(std::size_t{1}); } ||
+    requires(T& gen) { gen.generate_batch_async(std::size_t{1}); } ||
+    requires(T& gen) { gen.generate_group(std::wstring{L"group"}); };
+
+template <typename T>
+concept mutable_generation_settings =
+    requires(T& gen) { gen.seed(std::uint64_t{42}); } ||
+    requires(T& gen) { gen.unseed(); } ||
+    requires(T& gen, std::function<bool(const dasmig::entity&)> validator) {
+        gen.set_validator(validator);
+    } ||
+    requires(T& gen) { gen.clear_validator(); };
+
+static_assert(std::is_aggregate_v<dasmig::entity_request>);
+static_assert(!legacy_generation_api<dasmig::eg>);
+static_assert(!mutable_generation_settings<dasmig::eg>);
+static_assert(requires(const dasmig::eg& gen, const dasmig::entity_request& request) {
+    { gen.generate(request, 42) } -> std::same_as<dasmig::entity>;
+    { gen.generate_group(request, 42) } -> std::same_as<dasmig::entity>;
+    { gen.generate_batch(request, 42) } -> std::same_as<std::vector<dasmig::entity>>;
+    { gen.generate_batch_async(request, 42) } -> std::same_as<std::vector<dasmig::entity>>;
+});
+
 // ---------------------------------------------------------------------------
 // Test components
 // ---------------------------------------------------------------------------
@@ -443,8 +471,6 @@ struct clear_generator
     {
         auto& gen = dasmig::eg::instance();
         gen.clear();
-        gen.unseed();
-        gen.clear_validator();
         gen.clear_observers();
         gen.max_retries(10);
     }
@@ -496,7 +522,7 @@ TEST_CASE("add replaces component with same key", "[eg][registration]")
     gen.add(std::make_unique<string_component>(L"a", L"old"));
     gen.add(std::make_unique<string_component>(L"a", L"new"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.get<std::wstring>(L"a") == L"new");
 }
 
@@ -544,7 +570,7 @@ TEST_CASE("generate produces entity with all registered keys", "[eg][generate]")
     gen.add(std::make_unique<string_component>(L"a", L"alpha"))
        .add(std::make_unique<int_component>(L"b", 42));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.has(L"a"));
     REQUIRE(e.has(L"b"));
     REQUIRE(e.get<std::wstring>(L"a") == L"alpha");
@@ -555,7 +581,7 @@ TEST_CASE("generate with no components produces empty entity", "[eg][generate]")
 {
     clear_generator guard;
 
-    auto e = dasmig::eg::instance().generate();
+    auto e = dasmig::eg::instance().generate({});
     REQUIRE(e.keys().empty());
 }
 
@@ -572,7 +598,7 @@ TEST_CASE("generate with specific keys", "[eg][generate][filtered]")
        .add(std::make_unique<string_component>(L"b", L"beta"))
        .add(std::make_unique<string_component>(L"c", L"gamma"));
 
-    auto e = gen.generate({L"a", L"c"});
+    auto e = gen.generate({.component_keys = std::vector<std::wstring>{L"a", L"c"}});
     REQUIRE(e.has(L"a"));
     REQUIRE_FALSE(e.has(L"b"));
     REQUIRE(e.has(L"c"));
@@ -585,7 +611,7 @@ TEST_CASE("generate with unknown keys skips silently", "[eg][generate][filtered]
 
     gen.add(std::make_unique<string_component>(L"a", L"alpha"));
 
-    auto e = gen.generate({L"a", L"nonexistent"});
+    auto e = gen.generate({.component_keys = std::vector<std::wstring>{L"a", L"nonexistent"}});
     REQUIRE(e.has(L"a"));
     REQUIRE_FALSE(e.has(L"nonexistent"));
 }
@@ -600,7 +626,7 @@ TEST_CASE("filtered generate preserves registration order", "[eg][generate][filt
        .add(std::make_unique<string_component>(L"c", L"3"));
 
     // Request in reverse order.
-    auto e = gen.generate({L"c", L"a"});
+    auto e = gen.generate({.component_keys = std::vector<std::wstring>{L"c", L"a"}});
     auto keys = e.keys();
     REQUIRE(keys.size() == 2);
     REQUIRE(keys[0] == L"a");
@@ -619,7 +645,7 @@ TEST_CASE("entity::get returns correct typed value", "[entity]")
     gen.add(std::make_unique<string_component>(L"name", L"Alice"))
        .add(std::make_unique<int_component>(L"age", 30));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.get<std::wstring>(L"name") == L"Alice");
     REQUIRE(e.get<int>(L"age") == 30);
 }
@@ -630,7 +656,7 @@ TEST_CASE("entity::get_any returns std::any reference", "[entity]")
     auto& gen = dasmig::eg::instance();
 
     gen.add(std::make_unique<int_component>(L"age", 25));
-    auto e = gen.generate();
+    auto e = gen.generate({});
 
     const auto& val = e.get_any(L"age");
     REQUIRE(std::any_cast<int>(val) == 25);
@@ -642,7 +668,7 @@ TEST_CASE("entity::get throws on missing key", "[entity]")
     auto& gen = dasmig::eg::instance();
 
     gen.add(std::make_unique<string_component>(L"a", L"hi"));
-    auto e = gen.generate();
+    auto e = gen.generate({});
 
     REQUIRE_THROWS_AS(e.get<std::wstring>(L"missing"), std::out_of_range);
 }
@@ -653,7 +679,7 @@ TEST_CASE("entity::get throws on wrong type", "[entity]")
     auto& gen = dasmig::eg::instance();
 
     gen.add(std::make_unique<int_component>(L"age", 10));
-    auto e = gen.generate();
+    auto e = gen.generate({});
 
     REQUIRE_THROWS_AS(e.get<std::wstring>(L"age"), std::bad_any_cast);
 }
@@ -664,7 +690,7 @@ TEST_CASE("entity::has", "[entity]")
     auto& gen = dasmig::eg::instance();
 
     gen.add(std::make_unique<string_component>(L"a", L"val"));
-    auto e = gen.generate();
+    auto e = gen.generate({});
 
     REQUIRE(e.has(L"a"));
     REQUIRE_FALSE(e.has(L"b"));
@@ -679,7 +705,7 @@ TEST_CASE("entity::keys preserves generation order", "[entity]")
        .add(std::make_unique<string_component>(L"a", L"1"))
        .add(std::make_unique<string_component>(L"c", L"3"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     auto keys = e.keys();
     REQUIRE(keys.size() == 3);
     REQUIRE(keys[0] == L"b");
@@ -699,7 +725,7 @@ TEST_CASE("generation_context: component can access earlier value", "[context]")
     gen.add(std::make_unique<string_component>(L"name", L"Alice"))
        .add(std::make_unique<dependent_component>(L"greeting", L"name"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.get<std::wstring>(L"greeting") == L"dep:Alice");
 }
 
@@ -712,7 +738,7 @@ TEST_CASE("generation_context: ctx.has returns false for absent dep", "[context]
        .add(std::make_unique<dependent_component>(L"greeting", L"name"));
 
     // Generate only greeting, without name.
-    auto e = gen.generate({L"greeting"});
+    auto e = gen.generate({.component_keys = std::vector<std::wstring>{L"greeting"}});
     REQUIRE(e.get<std::wstring>(L"greeting") == L"dep:missing");
 }
 
@@ -722,7 +748,7 @@ TEST_CASE("generation_context: random engine is available", "[context]")
     auto& gen = dasmig::eg::instance();
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 100));
-    auto e = gen.generate();
+    auto e = gen.generate({});
 
     int val = e.get<int>(L"rand");
     REQUIRE(val >= 1);
@@ -740,8 +766,8 @@ TEST_CASE("generate with same per-call seed produces identical entities", "[seed
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
 
-    auto e1 = gen.generate(42);
-    auto e2 = gen.generate(42);
+    auto e1 = gen.generate({}, 42);
+    auto e2 = gen.generate({}, 42);
 
     REQUIRE(e1.get<int>(L"rand") == e2.get<int>(L"rand"));
 }
@@ -753,60 +779,55 @@ TEST_CASE("generate with different seeds produces different entities", "[seed]")
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
 
-    auto e1 = gen.generate(1);
-    auto e2 = gen.generate(2);
+    auto e1 = gen.generate({}, 1);
+    auto e2 = gen.generate({}, 2);
 
     // Probabilistically this should differ. With range 1-10000 and different
     // seeds, a collision is extremely unlikely.
     REQUIRE(e1.get<int>(L"rand") != e2.get<int>(L"rand"));
 }
 
-TEST_CASE("generator-level seed produces deterministic sequence", "[seed]")
+TEST_CASE("caller-owned seeds produce a deterministic sequence", "[seed][request]")
 {
     clear_generator guard;
     auto& gen = dasmig::eg::instance();
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
 
-    gen.seed(99);
-    auto a1 = gen.generate().get<int>(L"rand");
-    auto a2 = gen.generate().get<int>(L"rand");
+    dasmig::core::rng first{99};
+    auto a1 = gen.generate({}, first()).get<int>(L"rand");
+    auto a2 = gen.generate({}, first()).get<int>(L"rand");
 
-    gen.seed(99);
-    auto b1 = gen.generate().get<int>(L"rand");
-    auto b2 = gen.generate().get<int>(L"rand");
+    dasmig::core::rng second{99};
+    auto b1 = gen.generate({}, second()).get<int>(L"rand");
+    auto b2 = gen.generate({}, second()).get<int>(L"rand");
 
     REQUIRE(a1 == b1);
     REQUIRE(a2 == b2);
 }
 
-TEST_CASE("unseed makes generation non-deterministic again", "[seed]")
+TEST_CASE("unseeded calls do not change explicit seed replay", "[seed][request]")
 {
     clear_generator guard;
     auto& gen = dasmig::eg::instance();
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 1000000));
 
-    gen.seed(42);
-    auto seeded = gen.generate().get<int>(L"rand");
-    gen.unseed();
+    auto seeded = gen.generate({}, 42).get<int>(L"rand");
+    (void)gen.generate({});
 
-    // After unseed, re-seeding with same value should reproduce.
-    gen.seed(42);
-    auto reseeded = gen.generate().get<int>(L"rand");
+    auto reseeded = gen.generate({}, 42).get<int>(L"rand");
     REQUIRE(seeded == reseeded);
 }
 
-TEST_CASE("seed returns self for fluent chaining", "[seed]")
+TEST_CASE("seeded generation is available on a const generator", "[seed][request]")
 {
     clear_generator guard;
     auto& gen = dasmig::eg::instance();
 
-    auto& ret = gen.seed(1);
-    REQUIRE(&ret == &gen);
-
-    auto& ret2 = gen.unseed();
-    REQUIRE(&ret2 == &gen);
+    gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
+    const auto& const_gen = gen;
+    REQUIRE(const_gen.generate({}, 1).to_json() == gen.generate({}, 1).to_json());
 }
 
 TEST_CASE("filtered generate with seed", "[seed][filtered]")
@@ -817,8 +838,8 @@ TEST_CASE("filtered generate with seed", "[seed][filtered]")
     gen.add(std::make_unique<random_int_component>(L"a", 1, 10000))
        .add(std::make_unique<random_int_component>(L"b", 1, 10000));
 
-    auto e1 = gen.generate({L"a"}, 77);
-    auto e2 = gen.generate({L"a"}, 77);
+    auto e1 = gen.generate({.component_keys = std::vector<std::wstring>{L"a"}}, 77);
+    auto e2 = gen.generate({.component_keys = std::vector<std::wstring>{L"a"}}, 77);
 
     REQUIRE(e1.get<int>(L"a") == e2.get<int>(L"a"));
 }
@@ -833,7 +854,7 @@ TEST_CASE("custom type round-trips through std::any", "[entity][custom]")
     auto& gen = dasmig::eg::instance();
 
     gen.add(std::make_unique<custom_type_component>(custom_type{10, 20}));
-    auto e = gen.generate();
+    auto e = gen.generate({});
 
     auto val = e.get<custom_type>(L"pos");
     REQUIRE(val == custom_type{10, 20});
@@ -845,7 +866,7 @@ TEST_CASE("custom type to_string", "[entity][custom]")
     auto& gen = dasmig::eg::instance();
 
     gen.add(std::make_unique<custom_type_component>(custom_type{3, 7}));
-    auto e = gen.generate();
+    auto e = gen.generate({});
 
     std::wostringstream wos;
     wos << e;
@@ -865,7 +886,7 @@ TEST_CASE("operator<< outputs all components", "[entity][stream]")
     gen.add(std::make_unique<string_component>(L"name", L"Bob"))
        .add(std::make_unique<int_component>(L"age", 25));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     std::wostringstream wos;
     wos << e;
     auto output = wos.str();
@@ -882,7 +903,7 @@ TEST_CASE("operator<< respects generation order", "[entity][stream]")
     gen.add(std::make_unique<string_component>(L"b", L"second"))
        .add(std::make_unique<string_component>(L"a", L"first"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     std::wostringstream wos;
     wos << e;
     auto output = wos.str();
@@ -955,7 +976,7 @@ TEST_CASE("default_to_string: bool true", "[to_string]")
     gen.add(std::make_unique<bool_component>(true));
 
     std::wostringstream wos;
-    wos << gen.generate();
+    wos << gen.generate({});
     REQUIRE(wos.str().find(L"true") != std::wstring::npos);
 }
 
@@ -966,7 +987,7 @@ TEST_CASE("default_to_string: bool false", "[to_string]")
     gen.add(std::make_unique<bool_component>(false));
 
     std::wostringstream wos;
-    wos << gen.generate();
+    wos << gen.generate({});
     REQUIRE(wos.str().find(L"false") != std::wstring::npos);
 }
 
@@ -977,7 +998,7 @@ TEST_CASE("default_to_string: double", "[to_string]")
     gen.add(std::make_unique<double_component>(3.14));
 
     std::wostringstream wos;
-    wos << gen.generate();
+    wos << gen.generate({});
     REQUIRE(wos.str().find(L"3.14") != std::wstring::npos);
 }
 
@@ -988,7 +1009,7 @@ TEST_CASE("default_to_string: float", "[to_string]")
     gen.add(std::make_unique<float_component>(2.5f));
 
     std::wostringstream wos;
-    wos << gen.generate();
+    wos << gen.generate({});
     REQUIRE(wos.str().find(L"2.5") != std::wstring::npos);
 }
 
@@ -999,7 +1020,7 @@ TEST_CASE("default_to_string: unknown type returns [?]", "[to_string]")
     gen.add(std::make_unique<unknown_type_component>());
 
     std::wostringstream wos;
-    wos << gen.generate();
+    wos << gen.generate({});
     REQUIRE(wos.str().find(L"[?]") != std::wstring::npos);
 }
 
@@ -1015,7 +1036,7 @@ TEST_CASE("context: component doubles an int from a previous component", "[conte
     gen.add(std::make_unique<int_component>(L"level", 7))
        .add(std::make_unique<doubler_component>(L"level"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.get<int>(L"level") == 7);
     REQUIRE(e.get<int>(L"doubled") == 14);
 }
@@ -1028,8 +1049,7 @@ TEST_CASE("context: component uses random scaled by previous int", "[context][ty
     gen.add(std::make_unique<int_component>(L"level", 5))
        .add(std::make_unique<scaled_component>());
 
-    gen.seed(42);
-    auto e = gen.generate();
+    auto e = gen.generate({}, 42);
 
     int val = e.get<int>(L"scaled");
     // base is 1..10, level is 5, so result is 5..50.
@@ -1044,8 +1064,7 @@ TEST_CASE("context: scaled component falls back when level absent", "[context][t
 
     gen.add(std::make_unique<scaled_component>());
 
-    gen.seed(42);
-    auto e = gen.generate();
+    auto e = gen.generate({}, 42);
 
     int val = e.get<int>(L"scaled");
     // No level, so multiplier is 1. base is 1..10.
@@ -1067,7 +1086,7 @@ TEST_CASE("context: three-component dependency chain", "[context][chain]")
        .add(std::make_unique<doubler_component>(L"level"))
        .add(std::make_unique<chain_component>());
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.get<int>(L"level") == 10);
     REQUIRE(e.get<int>(L"doubled") == 20);
     REQUIRE(e.get<int>(L"chain") == 21);
@@ -1086,7 +1105,7 @@ TEST_CASE("context: earlier component cannot see later component", "[context][or
     gen.add(std::make_unique<forward_probe_component>())
        .add(std::make_unique<string_component>(L"later", L"I exist"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.get<bool>(L"probe") == false);
 }
 
@@ -1102,7 +1121,7 @@ TEST_CASE("context: ctx.get throws when dependency is absent", "[context][throws
     // doubler reads "level", but level is not registered.
     gen.add(std::make_unique<doubler_component>(L"level"));
 
-    REQUIRE_THROWS(gen.generate());
+    REQUIRE_THROWS(gen.generate({}));
 }
 
 // ---------------------------------------------------------------------------
@@ -1117,8 +1136,8 @@ TEST_CASE("seeded generation reproduces dependent computed values", "[context][s
     gen.add(std::make_unique<int_component>(L"level", 5))
        .add(std::make_unique<scaled_component>());
 
-    auto e1 = gen.generate(99);
-    auto e2 = gen.generate(99);
+    auto e1 = gen.generate({}, 99);
+    auto e2 = gen.generate({}, 99);
 
     REQUIRE(e1.get<int>(L"scaled") == e2.get<int>(L"scaled"));
 }
@@ -1134,7 +1153,7 @@ TEST_CASE("entity::seed returns the seed used for a component", "[seed][signatur
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
 
-    auto e = gen.generate(42);
+    auto e = gen.generate({}, 42);
     // Should not throw — seed exists for every generated component.
     REQUIRE_NOTHROW(e.seed(L"rand"));
 }
@@ -1147,8 +1166,8 @@ TEST_CASE("same generation seed produces same component seeds", "[seed][signatur
     gen.add(std::make_unique<random_int_component>(L"a", 1, 10000))
        .add(std::make_unique<random_int_component>(L"b", 1, 10000));
 
-    auto e1 = gen.generate(42);
-    auto e2 = gen.generate(42);
+    auto e1 = gen.generate({}, 42);
+    auto e2 = gen.generate({}, 42);
 
     REQUIRE(e1.seed(L"a") == e2.seed(L"a"));
     REQUIRE(e1.seed(L"b") == e2.seed(L"b"));
@@ -1162,7 +1181,7 @@ TEST_CASE("different components get different seeds", "[seed][signature]")
     gen.add(std::make_unique<random_int_component>(L"a", 1, 10000))
        .add(std::make_unique<random_int_component>(L"b", 1, 10000));
 
-    auto e = gen.generate(42);
+    auto e = gen.generate({}, 42);
 
     // Each component should be seeded independently.
     REQUIRE(e.seed(L"a") != e.seed(L"b"));
@@ -1175,7 +1194,7 @@ TEST_CASE("component seed reproduces the same value when used directly", "[seed]
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
 
-    auto e = gen.generate(42);
+    auto e = gen.generate({}, 42);
     auto captured_seed = e.seed(L"rand");
     int original_value = e.get<int>(L"rand");
 
@@ -1192,7 +1211,7 @@ TEST_CASE("entity::seed throws on missing key", "[seed][signature]")
     auto& gen = dasmig::eg::instance();
 
     gen.add(std::make_unique<string_component>(L"a", L"hi"));
-    auto e = gen.generate();
+    auto e = gen.generate({});
 
     REQUIRE_THROWS_AS(e.seed(L"missing"), std::out_of_range);
 }
@@ -1208,7 +1227,7 @@ TEST_CASE("entity::seed() returns the entity-level seed", "[seed][entity]")
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
 
-    auto e = gen.generate(42);
+    auto e = gen.generate({}, 42);
     // Should not throw — every entity has a seed.
     REQUIRE_NOTHROW(e.seed());
     REQUIRE(e.seed() != 0);
@@ -1221,8 +1240,8 @@ TEST_CASE("same generation seed produces same entity seed", "[seed][entity]")
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
 
-    auto e1 = gen.generate(42);
-    auto e2 = gen.generate(42);
+    auto e1 = gen.generate({}, 42);
+    auto e2 = gen.generate({}, 42);
 
     REQUIRE(e1.seed() == e2.seed());
 }
@@ -1234,8 +1253,8 @@ TEST_CASE("different generation seeds produce different entity seeds", "[seed][e
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
 
-    auto e1 = gen.generate(1);
-    auto e2 = gen.generate(2);
+    auto e1 = gen.generate({}, 1);
+    auto e2 = gen.generate({}, 2);
 
     REQUIRE(e1.seed() != e2.seed());
 }
@@ -1248,7 +1267,7 @@ TEST_CASE("entity seed reproduces all component seeds", "[seed][entity]")
     gen.add(std::make_unique<random_int_component>(L"a", 1, 10000))
        .add(std::make_unique<random_int_component>(L"b", 1, 10000));
 
-    auto e = gen.generate(42);
+    auto e = gen.generate({}, 42);
 
     // Derive component seeds from the entity seed as documented: the first
     // value of the component's "seed" stream, split from the entity seed by key.
@@ -1271,7 +1290,7 @@ TEST_CASE("generate_batch produces correct number of entities", "[batch]")
 
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    auto batch = gen.generate_batch(5);
+    auto batch = gen.generate_batch({.count = 5});
     REQUIRE(batch.size() == 5);
 
     for (const auto& e : batch)
@@ -1286,7 +1305,7 @@ TEST_CASE("generate_batch with zero count returns empty vector", "[batch]")
     auto& gen = dasmig::eg::instance();
 
     gen.add(std::make_unique<string_component>(L"a", L"val"));
-    auto batch = gen.generate_batch(0);
+    auto batch = gen.generate_batch({.count = 0});
     REQUIRE(batch.empty());
 }
 
@@ -1297,8 +1316,8 @@ TEST_CASE("generate_batch with seed is deterministic", "[batch][seed]")
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
 
-    auto b1 = gen.generate_batch(3, 42);
-    auto b2 = gen.generate_batch(3, 42);
+    auto b1 = gen.generate_batch({.count = 3}, 42);
+    auto b2 = gen.generate_batch({.count = 3}, 42);
 
     REQUIRE(b1.size() == 3);
     for (std::size_t i = 0; i < 3; ++i)
@@ -1314,7 +1333,7 @@ TEST_CASE("generate_batch entities have distinct seeds", "[batch][seed]")
 
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
 
-    auto batch = gen.generate_batch(3, 99);
+    auto batch = gen.generate_batch({.count = 3}, 99);
     // Each entity in the batch should have a different entity seed.
     REQUIRE(batch[0].seed() != batch[1].seed());
     REQUIRE(batch[1].seed() != batch[2].seed());
@@ -1375,7 +1394,7 @@ TEST_CASE("generate_group produces entity with group keys only", "[group]")
 
     gen.add_group(L"identity", {L"a", L"c"});
 
-    auto e = gen.generate_group(L"identity");
+    auto e = gen.generate_group({.group = L"identity"});
     REQUIRE(e.has(L"a"));
     REQUIRE_FALSE(e.has(L"b"));
     REQUIRE(e.has(L"c"));
@@ -1391,8 +1410,8 @@ TEST_CASE("generate_group with seed is deterministic", "[group][seed]")
 
     gen.add_group(L"combat", {L"rand"});
 
-    auto e1 = gen.generate_group(L"combat", 42);
-    auto e2 = gen.generate_group(L"combat", 42);
+    auto e1 = gen.generate_group({.group = L"combat"}, 42);
+    auto e2 = gen.generate_group({.group = L"combat"}, 42);
 
     REQUIRE(e1.get<int>(L"rand") == e2.get<int>(L"rand"));
 }
@@ -1402,7 +1421,7 @@ TEST_CASE("generate_group throws on unknown group", "[group]")
     clear_generator guard;
     auto& gen = dasmig::eg::instance();
 
-    REQUIRE_THROWS_AS(gen.generate_group(L"nonexistent"), std::out_of_range);
+    REQUIRE_THROWS_AS(gen.generate_group({.group = L"nonexistent"}), std::out_of_range);
 }
 
 TEST_CASE("generate_group with seed throws on unknown group", "[group]")
@@ -1410,7 +1429,7 @@ TEST_CASE("generate_group with seed throws on unknown group", "[group]")
     clear_generator guard;
     auto& gen = dasmig::eg::instance();
 
-    REQUIRE_THROWS_AS(gen.generate_group(L"nonexistent", 42), std::out_of_range);
+    REQUIRE_THROWS_AS(gen.generate_group({.group = L"nonexistent"}, 42), std::out_of_range);
 }
 
 // ---------------------------------------------------------------------------
@@ -1422,7 +1441,7 @@ TEST_CASE("eg can be default constructed", "[instance]")
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"hello"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.has(L"a"));
     REQUIRE(e.get<std::wstring>(L"a") == L"hello");
 }
@@ -1435,8 +1454,8 @@ TEST_CASE("independent instances do not share state", "[instance]")
     gen1.add(std::make_unique<string_component>(L"a", L"from_gen1"));
     gen2.add(std::make_unique<string_component>(L"b", L"from_gen2"));
 
-    auto e1 = gen1.generate();
-    auto e2 = gen2.generate();
+    auto e1 = gen1.generate({});
+    auto e2 = gen2.generate({});
 
     REQUIRE(e1.has(L"a"));
     REQUIRE_FALSE(e1.has(L"b"));
@@ -1462,7 +1481,7 @@ TEST_CASE("eg can be move constructed", "[instance]")
 
     dasmig::eg gen2 = std::move(gen1);
 
-    auto e = gen2.generate();
+    auto e = gen2.generate({});
     REQUIRE(e.has(L"a"));
     REQUIRE(e.get<std::wstring>(L"a") == L"hello");
 }
@@ -1471,14 +1490,12 @@ TEST_CASE("independent instance with seed is deterministic", "[instance][seed]")
 {
     dasmig::eg gen1;
     gen1.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
-    gen1.seed(42);
 
     dasmig::eg gen2;
     gen2.add(std::make_unique<random_int_component>(L"rand", 1, 10000));
-    gen2.seed(42);
 
-    auto e1 = gen1.generate();
-    auto e2 = gen2.generate();
+    auto e1 = gen1.generate({}, 42);
+    auto e2 = gen2.generate({}, 42);
 
     REQUIRE(e1.get<int>(L"rand") == e2.get<int>(L"rand"));
 }
@@ -1490,7 +1507,7 @@ TEST_CASE("independent instance supports groups", "[instance][group]")
        .add(std::make_unique<string_component>(L"b", L"beta"));
 
     gen.add_group(L"identity", {L"a"});
-    auto e = gen.generate_group(L"identity");
+    auto e = gen.generate_group({.group = L"identity"});
 
     REQUIRE(e.has(L"a"));
     REQUIRE_FALSE(e.has(L"b"));
@@ -1501,7 +1518,7 @@ TEST_CASE("independent instance supports batch", "[instance][batch]")
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    auto batch = gen.generate_batch(3);
+    auto batch = gen.generate_batch({.count = 3});
     REQUIRE(batch.size() == 3);
 }
 
@@ -1529,7 +1546,7 @@ TEST_CASE("weight 1.0 always includes component", "[weight]")
     // Weight defaults to 1.0, should always be present.
     for (int i = 0; i < 20; ++i)
     {
-        auto e = gen.generate();
+        auto e = gen.generate({});
         REQUIRE(e.has(L"a"));
     }
 }
@@ -1541,7 +1558,7 @@ TEST_CASE("weight 0.0 never includes component", "[weight]")
 
     for (int i = 0; i < 20; ++i)
     {
-        auto e = gen.generate();
+        auto e = gen.generate({});
         REQUIRE_FALSE(e.has(L"a"));
     }
 }
@@ -1554,7 +1571,7 @@ TEST_CASE("weight override via add overload", "[weight]")
 
     for (int i = 0; i < 20; ++i)
     {
-        auto e = gen.generate();
+        auto e = gen.generate({});
         REQUIRE_FALSE(e.has(L"a"));
     }
 }
@@ -1567,7 +1584,7 @@ TEST_CASE("weight override via weight method", "[weight]")
 
     for (int i = 0; i < 20; ++i)
     {
-        auto e = gen.generate();
+        auto e = gen.generate({});
         REQUIRE_FALSE(e.has(L"a"));
     }
 }
@@ -1586,7 +1603,7 @@ TEST_CASE("weight override takes precedence over interface weight", "[weight]")
 
     for (int i = 0; i < 20; ++i)
     {
-        auto e = gen.generate();
+        auto e = gen.generate({});
         REQUIRE(e.has(L"a"));
     }
 }
@@ -1602,7 +1619,7 @@ TEST_CASE("remove clears weight override", "[weight]")
 
     for (int i = 0; i < 20; ++i)
     {
-        auto e = gen.generate();
+        auto e = gen.generate({});
         REQUIRE(e.has(L"a"));
     }
 }
@@ -1617,8 +1634,8 @@ TEST_CASE("weighted component with seeded generation is deterministic", "[weight
     gen2.add(std::make_unique<weighted_component>(L"a", 0.5))
         .add(std::make_unique<string_component>(L"b", L"always"));
 
-    auto e1 = gen1.generate(42);
-    auto e2 = gen2.generate(42);
+    auto e1 = gen1.generate({}, 42);
+    auto e2 = gen2.generate({}, 42);
 
     REQUIRE(e1.has(L"a") == e2.has(L"a"));
     REQUIRE(e1.has(L"b") == e2.has(L"b"));
@@ -1633,7 +1650,7 @@ TEST_CASE("fractional weight includes component sometimes", "[weight]")
     constexpr int trials = 200;
     for (int i = 0; i < trials; ++i)
     {
-        auto e = gen.generate();
+        auto e = gen.generate({});
         if (e.has(L"a")) ++included;
     }
 
@@ -1649,7 +1666,7 @@ TEST_CASE("weight applies in filtered generation", "[weight]")
     gen.add(std::make_unique<weighted_component>(L"a", 0.0))
        .add(std::make_unique<string_component>(L"b", L"val"));
 
-    auto e = gen.generate({L"a", L"b"});
+    auto e = gen.generate({.component_keys = std::vector<std::wstring>{L"a", L"b"}});
     REQUIRE_FALSE(e.has(L"a"));
     REQUIRE(e.has(L"b"));
 }
@@ -1661,7 +1678,7 @@ TEST_CASE("weight applies in group generation", "[weight][group]")
        .add(std::make_unique<string_component>(L"b", L"val"));
     gen.add_group(L"grp", {L"a", L"b"});
 
-    auto e = gen.generate_group(L"grp");
+    auto e = gen.generate_group({.group = L"grp"});
     REQUIRE_FALSE(e.has(L"a"));
     REQUIRE(e.has(L"b"));
 }
@@ -1671,7 +1688,7 @@ TEST_CASE("weight applies in batch generation", "[weight][batch]")
     dasmig::eg gen;
     gen.add(std::make_unique<weighted_component>(L"a", 0.0));
 
-    auto batch = gen.generate_batch(5);
+    auto batch = gen.generate_batch({.count = 5});
     for (const auto& e : batch)
     {
         REQUIRE_FALSE(e.has(L"a"));
@@ -1687,7 +1704,7 @@ TEST_CASE("entity::to_string with single component", "[entity][to_string]")
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"name", L"Alice"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.to_string() == L"name: Alice");
 }
 
@@ -1697,14 +1714,14 @@ TEST_CASE("entity::to_string with multiple components", "[entity][to_string]")
     gen.add(std::make_unique<string_component>(L"a", L"alpha"))
        .add(std::make_unique<int_component>(L"b", 42));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.to_string() == L"a: alpha  b: 42");
 }
 
 TEST_CASE("entity::to_string on empty entity", "[entity][to_string]")
 {
     dasmig::eg gen;
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.to_string().empty());
 }
 
@@ -1714,7 +1731,7 @@ TEST_CASE("operator<< produces same output as to_string", "[entity][to_string]")
     gen.add(std::make_unique<string_component>(L"name", L"Bob"))
        .add(std::make_unique<int_component>(L"age", 25));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     std::wostringstream wos;
     wos << e;
     REQUIRE(wos.str() == e.to_string());
@@ -1736,7 +1753,7 @@ TEST_CASE("component validate rejects and retries", "[validation]")
     gen.add(std::make_unique<even_only_component>());
 
     // With retries, the generator should eventually produce an even value.
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.get<int>(L"even") % 2 == 0);
 }
 
@@ -1746,7 +1763,7 @@ TEST_CASE("component validate throws after max retries", "[validation]")
     gen.add(std::make_unique<always_invalid_component>(L"a"));
     gen.max_retries(3);
 
-    REQUIRE_THROWS_AS(gen.generate(), std::runtime_error);
+    REQUIRE_THROWS_AS(gen.generate({}), std::runtime_error);
 }
 
 TEST_CASE("component validate with seeded generation", "[validation][seed]")
@@ -1757,8 +1774,8 @@ TEST_CASE("component validate with seeded generation", "[validation][seed]")
     dasmig::eg gen2;
     gen2.add(std::make_unique<even_only_component>());
 
-    auto e1 = gen1.generate(42);
-    auto e2 = gen2.generate(42);
+    auto e1 = gen1.generate({}, 42);
+    auto e2 = gen2.generate({}, 42);
 
     REQUIRE(e1.get<int>(L"even") == e2.get<int>(L"even"));
     REQUIRE(e1.get<int>(L"even") % 2 == 0);
@@ -1767,20 +1784,6 @@ TEST_CASE("component validate with seeded generation", "[validation][seed]")
 // ---------------------------------------------------------------------------
 // Entity-level validation
 // ---------------------------------------------------------------------------
-
-TEST_CASE("set_validator returns self for fluent chaining", "[validation]")
-{
-    dasmig::eg gen;
-    auto& ret = gen.set_validator([](const dasmig::entity&) { return true; });
-    REQUIRE(&ret == &gen);
-}
-
-TEST_CASE("clear_validator returns self for fluent chaining", "[validation]")
-{
-    dasmig::eg gen;
-    auto& ret = gen.clear_validator();
-    REQUIRE(&ret == &gen);
-}
 
 TEST_CASE("max_retries returns self for fluent chaining", "[validation]")
 {
@@ -1793,11 +1796,11 @@ TEST_CASE("entity validator accepts valid entity", "[validation][entity]")
 {
     dasmig::eg gen;
     gen.add(std::make_unique<int_component>(L"age", 25));
-    gen.set_validator([](const dasmig::entity& e) {
+    const auto validator = [](const dasmig::entity& e) {
         return e.get<int>(L"age") > 0;
-    });
+    };
 
-    auto e = gen.generate();
+    auto e = gen.generate({.validator = validator});
     REQUIRE(e.get<int>(L"age") == 25);
 }
 
@@ -1805,12 +1808,12 @@ TEST_CASE("entity validator retries until valid", "[validation][entity]")
 {
     dasmig::eg gen;
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 100));
-    gen.set_validator([](const dasmig::entity& e) {
+    const auto validator = [](const dasmig::entity& e) {
         return e.get<int>(L"rand") > 50;
-    });
+    };
     gen.max_retries(100);
 
-    auto e = gen.generate();
+    auto e = gen.generate({.validator = validator});
     REQUIRE(e.get<int>(L"rand") > 50);
 }
 
@@ -1818,33 +1821,33 @@ TEST_CASE("entity validator throws after max retries", "[validation][entity]")
 {
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"val"));
-    gen.set_validator([](const dasmig::entity&) { return false; });
+    const auto validator = [](const dasmig::entity&) { return false; };
     gen.max_retries(3);
 
-    REQUIRE_THROWS_AS(gen.generate(), std::runtime_error);
+    REQUIRE_THROWS_AS(gen.generate({.validator = validator}), std::runtime_error);
 }
 
-TEST_CASE("clear_validator removes validation", "[validation][entity]")
+TEST_CASE("request validator does not leak to other calls", "[validation][entity][request]")
 {
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"val"));
-    gen.set_validator([](const dasmig::entity&) { return false; });
-    gen.clear_validator();
+    const dasmig::entity_request rejected{
+        .validator = [](const dasmig::entity&) { return false; }};
+    REQUIRE_THROWS_AS(gen.generate(rejected, 42), std::runtime_error);
 
-    // After clearing, generation should succeed.
-    REQUIRE_NOTHROW(gen.generate());
+    REQUIRE_NOTHROW(gen.generate({}));
 }
 
 TEST_CASE("entity validator applies to batch generation", "[validation][entity][batch]")
 {
     dasmig::eg gen;
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 100));
-    gen.set_validator([](const dasmig::entity& e) {
+    const auto validator = [](const dasmig::entity& e) {
         return e.get<int>(L"rand") > 10;
-    });
+    };
     gen.max_retries(100);
 
-    auto batch = gen.generate_batch(5);
+    auto batch = gen.generate_batch({.count = 5, .validator = validator});
     for (const auto& e : batch)
     {
         REQUIRE(e.get<int>(L"rand") > 10);
@@ -1857,12 +1860,12 @@ TEST_CASE("entity validator applies to group generation", "[validation][entity][
     gen.add(std::make_unique<random_int_component>(L"rand", 1, 100))
        .add(std::make_unique<string_component>(L"name", L"X"));
     gen.add_group(L"grp", {L"rand"});
-    gen.set_validator([](const dasmig::entity& e) {
+    const auto validator = [](const dasmig::entity& e) {
         return e.get<int>(L"rand") > 10;
-    });
+    };
     gen.max_retries(100);
 
-    auto e = gen.generate_group(L"grp");
+    auto e = gen.generate_group({.group = L"grp", .validator = validator});
     REQUIRE(e.get<int>(L"rand") > 10);
 }
 
@@ -1888,7 +1891,7 @@ TEST_CASE("no observer does not crash", "[observer]")
 {
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"hello"));
-    REQUIRE_NOTHROW(gen.generate());
+    REQUIRE_NOTHROW(gen.generate({}));
 }
 
 // ---------------------------------------------------------------------------
@@ -1903,7 +1906,7 @@ TEST_CASE("observer receives before/after generate", "[observer]")
     gen.add(std::make_unique<string_component>(L"a", L"val"));
     obs->events.clear();
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(obs->events.front() == L"before_generate");
     REQUIRE(obs->events.back() == L"after_generate");
@@ -1922,7 +1925,7 @@ TEST_CASE("observer receives before/after component in order", "[observer]")
     gen.add(std::make_unique<string_component>(L"b", L"2"));
     obs->events.clear();
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(obs->events.size() == 6);
     REQUIRE(obs->events[0] == L"before_generate");
@@ -1945,7 +1948,7 @@ TEST_CASE("observer receives before/after skip on weight exclusion", "[observer]
     gen.add(std::make_unique<string_component>(L"a", L"val"), 0.0);
     obs->events.clear();
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(obs->events[0] == L"before_generate");
     REQUIRE(obs->events[1] == L"skip:a");
@@ -1964,7 +1967,7 @@ TEST_CASE("observer receives before/after retry on validation retry", "[observer
     gen.add(std::make_unique<retry_count_component>(2));
     obs->events.clear();
 
-    gen.generate();
+    gen.generate({});
 
     // retry_count_component fails validation 2 times, producing exactly 2 retries.
     REQUIRE(obs->events[0] == L"before_generate");
@@ -1990,7 +1993,7 @@ TEST_CASE("observer receives component_fail on validation exhaustion", "[observe
     gen.max_retries(2);
     obs->events.clear();
 
-    REQUIRE_THROWS_AS(gen.generate(), std::runtime_error);
+    REQUIRE_THROWS_AS(gen.generate({}), std::runtime_error);
 
     auto it = std::ranges::find(obs->events, L"component_fail:a");
     REQUIRE(it != obs->events.end());
@@ -2008,12 +2011,12 @@ TEST_CASE("observer receives before/after entity retry", "[observer][validation]
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
     int call_count = 0;
-    gen.set_validator([&call_count](const dasmig::entity&) {
+    const auto validator = [&call_count](const dasmig::entity&) {
         return ++call_count > 1;
-    });
+    };
     obs->events.clear();
 
-    gen.generate();
+    gen.generate({.validator = validator});
 
     // Entity validator fails once, then succeeds. Expect 1 entity retry.
     REQUIRE(std::ranges::count(obs->events, L"before_entity_retry:1") == 1);
@@ -2030,11 +2033,11 @@ TEST_CASE("observer receives entity_fail on entity validation exhaustion", "[obs
     dasmig::eg gen;
     gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
-    gen.set_validator([](const dasmig::entity&) { return false; });
+    const auto validator = [](const dasmig::entity&) { return false; };
     gen.max_retries(2);
     obs->events.clear();
 
-    REQUIRE_THROWS_AS(gen.generate(), std::runtime_error);
+    REQUIRE_THROWS_AS(gen.generate({.validator = validator}), std::runtime_error);
 
     auto it = std::ranges::find(obs->events, L"entity_fail");
     REQUIRE(it != obs->events.end());
@@ -2097,7 +2100,7 @@ TEST_CASE("clear_observers stops hooks from firing", "[observer]")
     obs->events.clear();
 
     gen.clear_observers();
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(obs->events.empty());
 }
@@ -2114,7 +2117,7 @@ TEST_CASE("observer fires with seeded generation", "[observer][seed]")
     gen.add(std::make_unique<string_component>(L"a", L"val"));
     obs->events.clear();
 
-    gen.generate(42);
+    gen.generate({}, 42);
 
     REQUIRE(obs->events.front() == L"before_generate");
     REQUIRE(obs->events.back() == L"after_generate");
@@ -2128,7 +2131,7 @@ TEST_CASE("observer fires per entity in batch", "[observer][batch]")
     gen.add(std::make_unique<string_component>(L"a", L"val"));
     obs->events.clear();
 
-    gen.generate_batch(3);
+    gen.generate_batch({.count = 3});
 
     REQUIRE(std::ranges::count(obs->events, L"before_generate") == 3);
     REQUIRE(std::ranges::count(obs->events, L"after_generate") == 3);
@@ -2144,7 +2147,7 @@ TEST_CASE("observer fires with group generation", "[observer][group]")
     gen.add_group(L"grp", {L"a"});
     obs->events.clear();
 
-    gen.generate_group(L"grp");
+    gen.generate_group({.group = L"grp"});
 
     REQUIRE(obs->events.front() == L"before_generate");
     REQUIRE(obs->events.back() == L"after_generate");
@@ -2166,26 +2169,26 @@ TEST_CASE("default observer no-ops cover all hooks", "[observer]")
     // Generate + skip + component hooks.
     gen.add(std::make_unique<string_component>(L"a", L"val"), 0.0);
     gen.add(std::make_unique<string_component>(L"b", L"val"));
-    gen.generate();
+    gen.generate({});
     gen.remove(L"a");
     gen.remove(L"b");
 
     // Retry hooks.
     gen.add(std::make_unique<retry_count_component>(1));
-    gen.generate();
+    gen.generate({});
     gen.remove(L"retry_comp");
 
     // Component fail hooks.
     gen.add(std::make_unique<always_invalid_component>(L"a"));
     gen.max_retries(1);
-    REQUIRE_THROWS(gen.generate());
+    REQUIRE_THROWS(gen.generate({}));
     gen.remove(L"a");
 
     // Entity retry + entity fail hooks.
     gen.add(std::make_unique<string_component>(L"a", L"val"));
-    gen.set_validator([](const dasmig::entity&) { return false; });
+    const auto validator = [](const dasmig::entity&) { return false; };
     gen.max_retries(1);
-    REQUIRE_THROWS(gen.generate());
+    REQUIRE_THROWS(gen.generate({.validator = validator}));
 }
 
 // ---------------------------------------------------------------------------
@@ -2198,7 +2201,7 @@ TEST_CASE("default should_generate always returns true", "[conditional]")
     string_component comp(L"a", L"val");
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"val"));
-    auto e = gen.generate();
+    auto e = gen.generate({});
     // If should_generate defaulted to false, "a" would be absent.
     REQUIRE(e.has(L"a"));
 }
@@ -2208,7 +2211,7 @@ TEST_CASE("conditional component skips when dependency absent", "[conditional]")
     dasmig::eg gen;
     gen.add(std::make_unique<conditional_component>(L"greeting", L"name"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE_FALSE(e.has(L"greeting"));
 }
 
@@ -2218,7 +2221,7 @@ TEST_CASE("conditional component generates when dependency present", "[condition
     gen.add(std::make_unique<string_component>(L"name", L"Alice"));
     gen.add(std::make_unique<conditional_component>(L"greeting", L"name"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.has(L"greeting"));
     REQUIRE(e.get<std::wstring>(L"greeting") == L"conditional_value");
 }
@@ -2228,7 +2231,7 @@ TEST_CASE("never_generate component is always skipped", "[conditional]")
     dasmig::eg gen;
     gen.add(std::make_unique<never_generate_component>(L"hidden"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE_FALSE(e.has(L"hidden"));
 }
 
@@ -2240,7 +2243,7 @@ TEST_CASE("conditional skip fires observer hooks", "[conditional][observer]")
     gen.add(std::make_unique<never_generate_component>(L"hidden"));
     obs->events.clear();
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(std::ranges::count(obs->events, L"skip:hidden") == 1);
     REQUIRE(std::ranges::count(obs->events, L"before_component:hidden") == 0);
@@ -2256,8 +2259,8 @@ TEST_CASE("conditional component with seeded generation is deterministic", "[con
     gen2.add(std::make_unique<string_component>(L"name", L"Alice"));
     gen2.add(std::make_unique<conditional_component>(L"greeting", L"name"));
 
-    auto e1 = gen1.generate(42);
-    auto e2 = gen2.generate(42);
+    auto e1 = gen1.generate({}, 42);
+    auto e2 = gen2.generate({}, 42);
 
     REQUIRE(e1.has(L"greeting") == e2.has(L"greeting"));
 }
@@ -2268,7 +2271,7 @@ TEST_CASE("conditional component in batch", "[conditional][batch]")
     gen.add(std::make_unique<never_generate_component>(L"hidden"));
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    auto batch = gen.generate_batch(3);
+    auto batch = gen.generate_batch({.count = 3});
     for (const auto& e : batch)
     {
         REQUIRE_FALSE(e.has(L"hidden"));
@@ -2283,7 +2286,7 @@ TEST_CASE("conditional and weight interact correctly", "[conditional][weight]")
     gen.add(std::make_unique<never_generate_component>(L"hidden"), 0.0);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     // Weight skip happens first (before should_generate is checked).
     REQUIRE_FALSE(e.has(L"hidden"));
     REQUIRE(e.has(L"a"));
@@ -2298,7 +2301,7 @@ TEST_CASE("conditional component in group", "[conditional][group]")
 
     // Group only has "greeting", but "name" is not in group — so ctx won't
     // have "name", and greeting should be skipped.
-    auto e = gen.generate_group(L"grp");
+    auto e = gen.generate_group({.group = L"grp"});
     REQUIRE_FALSE(e.has(L"greeting"));
 }
 
@@ -2310,7 +2313,7 @@ TEST_CASE("default observer covers conditional skip", "[conditional][observer]")
     gen.add(std::make_unique<never_generate_component>(L"hidden"));
 
     // Should not crash — default no-op observer.
-    REQUIRE_NOTHROW(gen.generate());
+    REQUIRE_NOTHROW(gen.generate({}));
 }
 
 // ---------------------------------------------------------------------------
@@ -2323,7 +2326,7 @@ TEST_CASE("to_map returns key-display pairs", "[serialization][to_map]")
     gen.add(std::make_unique<string_component>(L"name", L"Alice"));
     gen.add(std::make_unique<int_component>(L"age", 30));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     auto m = e.to_map();
 
     REQUIRE(m.size() == 2);
@@ -2334,7 +2337,7 @@ TEST_CASE("to_map returns key-display pairs", "[serialization][to_map]")
 TEST_CASE("to_map on empty entity returns empty map", "[serialization][to_map]")
 {
     dasmig::eg gen;
-    auto e = gen.generate();
+    auto e = gen.generate({});
     auto m = e.to_map();
 
     REQUIRE(m.empty());
@@ -2345,7 +2348,7 @@ TEST_CASE("to_map single component", "[serialization][to_map]")
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"x", L"hello"));
 
-    auto m = gen.generate().to_map();
+    auto m = gen.generate({}).to_map();
 
     REQUIRE(m.size() == 1);
     REQUIRE(m.at(L"x") == L"hello");
@@ -2356,7 +2359,7 @@ TEST_CASE("to_map preserves custom type display", "[serialization][to_map]")
     dasmig::eg gen;
     gen.add(std::make_unique<custom_type_component>(custom_type{3, 7}));
 
-    auto m = gen.generate().to_map();
+    auto m = gen.generate({}).to_map();
 
     REQUIRE(m.at(L"pos") == L"(3,7)");
 }
@@ -2368,7 +2371,7 @@ TEST_CASE("to_map with selective generation", "[serialization][to_map]")
     gen.add(std::make_unique<string_component>(L"b", L"B"));
     gen.add(std::make_unique<string_component>(L"c", L"C"));
 
-    auto m = gen.generate({L"a", L"c"}).to_map();
+    auto m = gen.generate({.component_keys = std::vector<std::wstring>{L"a", L"c"}}).to_map();
 
     REQUIRE(m.size() == 2);
     REQUIRE(m.contains(L"a"));
@@ -2382,8 +2385,8 @@ TEST_CASE("to_map with seeded generation is reproducible",
     dasmig::eg gen;
     gen.add(std::make_unique<random_int_component>(L"val", 1, 1000));
 
-    auto m1 = gen.generate(42).to_map();
-    auto m2 = gen.generate(42).to_map();
+    auto m1 = gen.generate({}, 42).to_map();
+    auto m2 = gen.generate({}, 42).to_map();
 
     REQUIRE(m1 == m2);
 }
@@ -2397,7 +2400,7 @@ TEST_CASE("generate_batch_async returns correct count", "[async][batch]")
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"name", L"X"));
 
-    auto entities = gen.generate_batch_async(5);
+    auto entities = gen.generate_batch_async({.count = 5});
 
     REQUIRE(entities.size() == 5);
     for (const auto& e : entities)
@@ -2411,7 +2414,7 @@ TEST_CASE("generate_batch_async zero count returns empty", "[async][batch]")
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"v"));
 
-    auto entities = gen.generate_batch_async(0);
+    auto entities = gen.generate_batch_async({.count = 0});
 
     REQUIRE(entities.empty());
 }
@@ -2421,8 +2424,8 @@ TEST_CASE("generate_batch_async seeded is deterministic", "[async][batch][seed]"
     dasmig::eg gen;
     gen.add(std::make_unique<random_int_component>(L"val", 1, 10000));
 
-    auto batch1 = gen.generate_batch_async(10, 42);
-    auto batch2 = gen.generate_batch_async(10, 42);
+    auto batch1 = gen.generate_batch_async({.count = 10}, 42);
+    auto batch2 = gen.generate_batch_async({.count = 10}, 42);
 
     REQUIRE(batch1.size() == batch2.size());
     for (std::size_t i = 0; i < batch1.size(); ++i)
@@ -2436,7 +2439,7 @@ TEST_CASE("generate_batch_async seeded zero count", "[async][batch][seed]")
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"v"));
 
-    auto entities = gen.generate_batch_async(0, 99);
+    auto entities = gen.generate_batch_async({.count = 0}, 99);
 
     REQUIRE(entities.empty());
 }
@@ -2447,7 +2450,7 @@ TEST_CASE("generate_batch_async produces unique entity seeds",
     dasmig::eg gen;
     gen.add(std::make_unique<random_int_component>(L"v", 1, 100000));
 
-    auto batch = gen.generate_batch_async(20, 42);
+    auto batch = gen.generate_batch_async({.count = 20}, 42);
 
     std::set<std::uint64_t> seeds;
     for (const auto& e : batch)
@@ -2464,7 +2467,7 @@ TEST_CASE("generate_batch_async with multiple components", "[async][batch]")
     gen.add(std::make_unique<int_component>(L"level", 5));
     gen.add(std::make_unique<random_int_component>(L"hp", 10, 100));
 
-    auto batch = gen.generate_batch_async(8);
+    auto batch = gen.generate_batch_async({.count = 8});
 
     REQUIRE(batch.size() == 8);
     for (const auto& e : batch)
@@ -2482,12 +2485,12 @@ TEST_CASE("generate_batch_async entity validation applies",
 {
     dasmig::eg gen;
     gen.add(std::make_unique<random_int_component>(L"val", 1, 100));
-    gen.set_validator([](const dasmig::entity& e) {
+    const auto validator = [](const dasmig::entity& e) {
         return e.get<int>(L"val") > 20;
-    });
+    };
     gen.max_retries(100);
 
-    auto batch = gen.generate_batch_async(5);
+    auto batch = gen.generate_batch_async({.count = 5, .validator = validator});
 
     for (const auto& e : batch)
     {
@@ -2500,12 +2503,12 @@ TEST_CASE("generate_batch_async seeded entity validation applies",
 {
     dasmig::eg gen;
     gen.add(std::make_unique<random_int_component>(L"val", 1, 100));
-    gen.set_validator([](const dasmig::entity& e) {
+    const auto validator = [](const dasmig::entity& e) {
         return e.get<int>(L"val") > 20;
-    });
+    };
     gen.max_retries(100);
 
-    auto batch = gen.generate_batch_async(5, 77);
+    auto batch = gen.generate_batch_async({.count = 5, .validator = validator}, 77);
 
     for (const auto& e : batch)
     {
@@ -2518,7 +2521,7 @@ TEST_CASE("generate_batch_async single entity", "[async][batch]")
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"k", L"v"));
 
-    auto batch = gen.generate_batch_async(1);
+    auto batch = gen.generate_batch_async({.count = 1});
 
     REQUIRE(batch.size() == 1);
     REQUIRE(batch[0].get<std::wstring>(L"k") == L"v");
@@ -2539,7 +2542,7 @@ TEST_CASE("generate_batch_async observer hooks fire",
     gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"x", L"v"));
 
-    gen.generate_batch_async(5);
+    gen.generate_batch_async({.count = 5});
 
     REQUIRE(obs->count == 5);
 }
@@ -2553,7 +2556,7 @@ TEST_CASE("constant_component returns fixed value", "[generic][constant]")
     dasmig::eg gen;
     gen.add(std::make_unique<dasmig::constant_component<int>>(L"ver", 42));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.get<int>(L"ver") == 42);
 }
 
@@ -2563,7 +2566,7 @@ TEST_CASE("constant_component with wstring", "[generic][constant]")
     gen.add(std::make_unique<dasmig::constant_component<std::wstring>>(
         L"label", L"hello"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.get<std::wstring>(L"label") == L"hello");
 }
 
@@ -2572,7 +2575,7 @@ TEST_CASE("constant_component default to_string", "[generic][constant]")
     dasmig::eg gen;
     gen.add(std::make_unique<dasmig::constant_component<int>>(L"n", 7));
 
-    auto m = gen.generate().to_map();
+    auto m = gen.generate({}).to_map();
     REQUIRE(m.at(L"n") == L"7");
 }
 
@@ -2583,7 +2586,7 @@ TEST_CASE("constant_component custom formatter", "[generic][constant]")
     gen.add(std::make_unique<dasmig::constant_component<int, decltype(fmt)>>(
         L"id", 5, fmt));
 
-    auto m = gen.generate().to_map();
+    auto m = gen.generate({}).to_map();
     REQUIRE(m.at(L"id") == L"#5");
 }
 
@@ -2592,8 +2595,8 @@ TEST_CASE("constant_component seeded is reproducible", "[generic][constant][seed
     dasmig::eg gen;
     gen.add(std::make_unique<dasmig::constant_component<double>>(L"pi", 3.14));
 
-    auto e1 = gen.generate(99);
-    auto e2 = gen.generate(99);
+    auto e1 = gen.generate({}, 99);
+    auto e2 = gen.generate({}, 99);
     REQUIRE(e1.get<double>(L"pi") == e2.get<double>(L"pi"));
 }
 
@@ -2607,7 +2610,7 @@ TEST_CASE("choice_component picks from list", "[generic][choice]")
     gen.add(std::make_unique<dasmig::choice_component<std::wstring>>(
         L"color", std::vector<std::wstring>{L"red", L"green", L"blue"}));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     auto val = e.get<std::wstring>(L"color");
     REQUIRE((val == L"red" || val == L"green" || val == L"blue"));
 }
@@ -2618,7 +2621,7 @@ TEST_CASE("choice_component with int", "[generic][choice]")
     gen.add(std::make_unique<dasmig::choice_component<int>>(
         L"die", std::vector<int>{1, 2, 3, 4, 5, 6}));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     auto val = e.get<int>(L"die");
     REQUIRE(val >= 1);
     REQUIRE(val <= 6);
@@ -2630,7 +2633,7 @@ TEST_CASE("choice_component seeded is deterministic", "[generic][choice][seed]")
         dasmig::eg gen;
         gen.add(std::make_unique<dasmig::choice_component<std::wstring>>(
             L"x", std::vector<std::wstring>{L"a", L"b", L"c", L"d"}));
-        return gen.generate(42);
+        return gen.generate({}, 42);
     };
 
     REQUIRE(make().get<std::wstring>(L"x") ==
@@ -2644,7 +2647,7 @@ TEST_CASE("choice_component custom formatter", "[generic][choice]")
     gen.add(std::make_unique<dasmig::choice_component<int, decltype(fmt)>>(
         L"pick", std::vector<int>{10, 20}, fmt));
 
-    auto m = gen.generate().to_map();
+    auto m = gen.generate({}).to_map();
     auto display = m.at(L"pick");
     REQUIRE((display == L"[10]" || display == L"[20]"));
 }
@@ -2660,7 +2663,7 @@ TEST_CASE("range_component int in bounds", "[generic][range]")
 
     for (int i = 0; i < 20; ++i)
     {
-        auto e = gen.generate();
+        auto e = gen.generate({});
         REQUIRE(e.get<int>(L"age") >= 18);
         REQUIRE(e.get<int>(L"age") <= 65);
     }
@@ -2674,7 +2677,7 @@ TEST_CASE("range_component double in bounds", "[generic][range]")
 
     for (int i = 0; i < 20; ++i)
     {
-        auto e = gen.generate();
+        auto e = gen.generate({});
         REQUIRE(e.get<double>(L"pct") >= 0.0);
         REQUIRE(e.get<double>(L"pct") <= 1.0);
     }
@@ -2685,7 +2688,7 @@ TEST_CASE("range_component seeded is deterministic", "[generic][range][seed]")
     auto make = [] {
         dasmig::eg gen;
         gen.add(std::make_unique<dasmig::range_component<int>>(L"v", 1, 10000));
-        return gen.generate(42);
+        return gen.generate({}, 42);
     };
 
     REQUIRE(make().get<int>(L"v") == make().get<int>(L"v"));
@@ -2696,7 +2699,7 @@ TEST_CASE("range_component default to_string", "[generic][range]")
     dasmig::eg gen;
     gen.add(std::make_unique<dasmig::range_component<int>>(L"n", 5, 5));
 
-    auto m = gen.generate().to_map();
+    auto m = gen.generate({}).to_map();
     REQUIRE(m.at(L"n") == L"5");
 }
 
@@ -2707,7 +2710,7 @@ TEST_CASE("range_component custom formatter", "[generic][range]")
     gen.add(std::make_unique<dasmig::range_component<int, decltype(fmt)>>(
         L"level", 1, 1, fmt));
 
-    auto m = gen.generate().to_map();
+    auto m = gen.generate({}).to_map();
     REQUIRE(m.at(L"level") == L"lv1");
 }
 
@@ -2729,7 +2732,7 @@ TEST_CASE("callback_component simple lambda", "[generic][callback]")
             return L"hello";
         }));
 
-    REQUIRE(gen.generate().get<std::wstring>(L"msg") == L"hello");
+    REQUIRE(gen.generate({}).get<std::wstring>(L"msg") == L"hello");
 }
 
 TEST_CASE("callback_component reads context", "[generic][callback]")
@@ -2741,7 +2744,7 @@ TEST_CASE("callback_component reads context", "[generic][callback]")
             return ctx.get<int>(L"base") * 2;
         }));
 
-    REQUIRE(gen.generate().get<int>(L"doubled") == 20);
+    REQUIRE(gen.generate({}).get<int>(L"doubled") == 20);
 }
 
 TEST_CASE("callback_component uses ctx random", "[generic][callback]")
@@ -2752,7 +2755,7 @@ TEST_CASE("callback_component uses ctx random", "[generic][callback]")
             return dasmig::core::uniform_int(ctx.random(), 1, 6);
         }));
 
-    auto val = gen.generate().get<int>(L"roll");
+    auto val = gen.generate({}).get<int>(L"roll");
     REQUIRE(val >= 1);
     REQUIRE(val <= 6);
 }
@@ -2765,7 +2768,7 @@ TEST_CASE("callback_component seeded is deterministic", "[generic][callback][see
             L"r", [](const dasmig::generation_context& ctx) -> int {
                 return dasmig::core::uniform_int(ctx.random(), 1, 10000);
             }));
-        return gen.generate(42);
+        return gen.generate({}, 42);
     };
 
     REQUIRE(make().get<int>(L"r") == make().get<int>(L"r"));
@@ -2782,7 +2785,7 @@ TEST_CASE("callback_component custom formatter", "[generic][callback]")
         [](const dasmig::generation_context&) -> int { return 9; },
         fmt));
 
-    auto m = gen.generate().to_map();
+    auto m = gen.generate({}).to_map();
     REQUIRE(m.at(L"x") == L"=9");
 }
 
@@ -2799,7 +2802,7 @@ TEST_CASE("weighted_choice_component picks from options",
         L"rarity", std::vector<wc::option>{
             {L"common", 70.0}, {L"rare", 25.0}, {L"legendary", 5.0}}));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     auto val = e.get<std::wstring>(L"rarity");
     REQUIRE((val == L"common" || val == L"rare" || val == L"legendary"));
 }
@@ -2815,7 +2818,7 @@ TEST_CASE("weighted_choice_component respects weights",
 
     for (int i = 0; i < 30; ++i)
     {
-        REQUIRE(gen.generate().get<int>(L"v") == 2);
+        REQUIRE(gen.generate({}).get<int>(L"v") == 2);
     }
 }
 
@@ -2827,7 +2830,7 @@ TEST_CASE("weighted_choice_component single option always picked",
     gen.add(std::make_unique<wc>(
         L"only", std::vector<wc::option>{{L"sole", 1.0}}));
 
-    REQUIRE(gen.generate().get<std::wstring>(L"only") == L"sole");
+    REQUIRE(gen.generate({}).get<std::wstring>(L"only") == L"sole");
 }
 
 TEST_CASE("weighted_choice_component seeded is deterministic",
@@ -2838,7 +2841,7 @@ TEST_CASE("weighted_choice_component seeded is deterministic",
         dasmig::eg gen;
         gen.add(std::make_unique<wc>(
             L"n", std::vector<wc::option>{{1, 1.0}, {2, 1.0}, {3, 1.0}}));
-        return gen.generate(42);
+        return gen.generate({}, 42);
     };
 
     REQUIRE(make().get<int>(L"n") == make().get<int>(L"n"));
@@ -2854,7 +2857,7 @@ TEST_CASE("weighted_choice_component custom formatter",
     gen.add(std::make_unique<wc>(
         L"x", std::vector<wc::option>{{7, 1.0}}, fmt));
 
-    auto m = gen.generate().to_map();
+    auto m = gen.generate({}).to_map();
     REQUIRE(m.at(L"x") == L"w7");
 }
 
@@ -2866,7 +2869,7 @@ TEST_CASE("weighted_choice_component default to_string",
     gen.add(std::make_unique<wc>(
         L"n", std::vector<wc::option>{{42, 1.0}}));
 
-    auto m = gen.generate().to_map();
+    auto m = gen.generate({}).to_map();
     REQUIRE(m.at(L"n") == L"42");
 }
 
@@ -2882,7 +2885,7 @@ TEST_CASE("generic components work with batch generation",
     gen.add(std::make_unique<dasmig::choice_component<std::wstring>>(
         L"class", std::vector<std::wstring>{L"A", L"B"}));
 
-    auto batch = gen.generate_batch(5);
+    auto batch = gen.generate_batch({.count = 5});
     REQUIRE(batch.size() == 5);
     for (const auto& e : batch)
     {
@@ -2898,7 +2901,7 @@ TEST_CASE("generic components work with groups", "[generic][group]")
     gen.add(std::make_unique<dasmig::range_component<int>>(L"b", 1, 10));
     gen.add_group(L"grp", {L"a"});
 
-    auto e = gen.generate_group(L"grp");
+    auto e = gen.generate_group({.group = L"grp"});
     REQUIRE(e.has(L"a"));
     REQUIRE_FALSE(e.has(L"b"));
 }
@@ -2909,7 +2912,7 @@ TEST_CASE("generic components work with weight overrides",
     dasmig::eg gen;
     gen.add(std::make_unique<dasmig::constant_component<int>>(L"x", 1), 0.0);
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE_FALSE(e.has(L"x"));
 }
 
@@ -2926,7 +2929,7 @@ TEST_CASE("multiple observers all receive hooks", "[observer][multi]")
     gen.add_observer(obs2);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE_FALSE(obs1->events.empty());
     REQUIRE(obs1->events == obs2->events);
@@ -2942,7 +2945,7 @@ TEST_CASE("remove_observer stops hooks for that observer", "[observer][multi]")
     gen.add_observer(obs2);
 
     gen.remove_observer(obs1);
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(obs1->events.empty());
     REQUIRE_FALSE(obs2->events.empty());
@@ -2974,7 +2977,7 @@ TEST_CASE("add same observer twice fires hooks twice", "[observer][multi]")
     gen.add_observer(obs);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    gen.generate();
+    gen.generate({});
 
     // on_before_generate fires twice (once per registration).
     auto count = std::ranges::count(obs->events, L"before_generate");
@@ -2992,7 +2995,7 @@ TEST_CASE("stats_observer counts entities generated", "[ext][stats]")
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    gen.generate_batch(5);
+    gen.generate_batch({.count = 5});
 
     REQUIRE(stats->entities_generated == 5);
 }
@@ -3005,7 +3008,7 @@ TEST_CASE("stats_observer counts components generated", "[ext][stats]")
     gen.add(std::make_unique<string_component>(L"a", L"A"));
     gen.add(std::make_unique<string_component>(L"b", L"B"));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->components_generated == 2);
 }
@@ -3017,7 +3020,7 @@ TEST_CASE("stats_observer counts skipped components", "[ext][stats]")
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"a", L"A"), 0.0);
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->components_skipped == 1);
     REQUIRE(stats->components_generated == 0);
@@ -3031,7 +3034,7 @@ TEST_CASE("stats_observer counts component retries", "[ext][stats]")
     gen.add(std::make_unique<retry_count_component>(3));
     gen.max_retries(10);
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->components_generated == 1);
     REQUIRE(stats->component_retries.at(L"retry_comp") == 3);
@@ -3045,7 +3048,7 @@ TEST_CASE("stats_observer counts component failures", "[ext][stats]")
     gen.add(std::make_unique<always_invalid_component>(L"bad"));
     gen.max_retries(3);
 
-    REQUIRE_THROWS(gen.generate());
+    REQUIRE_THROWS(gen.generate({}));
 
     REQUIRE(stats->component_failures == 1);
 }
@@ -3056,13 +3059,13 @@ TEST_CASE("stats_observer counts entity retries", "[ext][stats]")
     dasmig::eg gen;
     gen.add_observer(stats);
     gen.add(std::make_unique<random_int_component>(L"v", 1, 100));
-    gen.set_validator([](const dasmig::entity& e) {
+    const auto validator = [](const dasmig::entity& e) {
         return e.get<int>(L"v") > 95;
-    });
+    };
     gen.max_retries(200);
 
     // Seeded: unseeded, the first attempt passed one time in twenty.
-    (void)gen.generate(1);
+    (void)gen.generate({.validator = validator}, 1);
 
     REQUIRE(stats->entities_generated == 1);
     REQUIRE(stats->entity_retries > 0);
@@ -3074,10 +3077,10 @@ TEST_CASE("stats_observer counts entity failures", "[ext][stats]")
     dasmig::eg gen;
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
-    gen.set_validator([](const dasmig::entity&) { return false; });
+    const auto validator = [](const dasmig::entity&) { return false; };
     gen.max_retries(2);
 
-    REQUIRE_THROWS(gen.generate());
+    REQUIRE_THROWS(gen.generate({.validator = validator}));
 
     REQUIRE(stats->entity_failures == 1);
 }
@@ -3089,7 +3092,7 @@ TEST_CASE("stats_observer reset clears all counters", "[ext][stats]")
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    gen.generate_batch(3);
+    gen.generate_batch({.count = 3});
     stats->reset();
 
     REQUIRE(stats->entities_generated == 0);
@@ -3134,7 +3137,7 @@ TEST_CASE("stats_observer works alongside other observers",
     gen.add_observer(log);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->entities_generated == 1);
     REQUIRE_FALSE(log->events.empty());
@@ -3147,7 +3150,7 @@ TEST_CASE("stats_observer conditional skip counted", "[ext][stats][conditional]"
     gen.add_observer(stats);
     gen.add(std::make_unique<never_generate_component>(L"skip"));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->components_skipped == 1);
     REQUIRE(stats->components_generated == 0);
@@ -3164,7 +3167,7 @@ TEST_CASE("stats_observer tracks total generation time", "[ext][stats][timing]")
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    gen.generate_batch(5);
+    gen.generate_batch({.count = 5});
 
     REQUIRE(stats->total_generation_time >
             dasmig::ext::stats_observer::duration::zero());
@@ -3178,7 +3181,7 @@ TEST_CASE("stats_observer tracks min and max entity time",
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    gen.generate_batch(10);
+    gen.generate_batch({.count = 10});
 
     REQUIRE(stats->min_entity_time <=
             stats->max_entity_time);
@@ -3194,7 +3197,7 @@ TEST_CASE("stats_observer avg_entity_time computed correctly",
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    gen.generate_batch(4);
+    gen.generate_batch({.count = 4});
 
     auto avg = stats->avg_entity_time();
     REQUIRE(avg > dasmig::ext::stats_observer::duration::zero());
@@ -3222,7 +3225,7 @@ TEST_CASE("stats_observer tracks per-component-key time",
     gen.add(std::make_unique<string_component>(L"a", L"A"));
     gen.add(std::make_unique<string_component>(L"b", L"B"));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->component_times.contains(L"a"));
     REQUIRE(stats->component_times.contains(L"b"));
@@ -3236,7 +3239,7 @@ TEST_CASE("stats_observer per-component min/max initialise on first call",
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"x", L"val"));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->component_min_times.at(L"x") ==
             stats->component_max_times.at(L"x"));
@@ -3250,7 +3253,7 @@ TEST_CASE("stats_observer avg_component_time helper",
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"c", L"val"));
 
-    gen.generate_batch(5);
+    gen.generate_batch({.count = 5});
 
     auto avg = stats->avg_component_time(L"c");
     REQUIRE(avg > dasmig::ext::stats_observer::duration::zero());
@@ -3277,7 +3280,7 @@ TEST_CASE("stats_observer per-key generation counts", "[ext][stats]")
     gen.add(std::make_unique<string_component>(L"a", L"A"));
     gen.add(std::make_unique<string_component>(L"b", L"B"));
 
-    gen.generate_batch(3);
+    gen.generate_batch({.count = 3});
 
     REQUIRE(stats->component_counts.at(L"a") == 3);
     REQUIRE(stats->component_counts.at(L"b") == 3);
@@ -3290,7 +3293,7 @@ TEST_CASE("stats_observer per-key skip counts", "[ext][stats]")
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"a", L"A"), 0.0);
 
-    gen.generate_batch(3);
+    gen.generate_batch({.count = 3});
 
     REQUIRE(stats->component_skip_counts.at(L"a") == 3);
 }
@@ -3303,7 +3306,7 @@ TEST_CASE("stats_observer per-key failure counts", "[ext][stats]")
     gen.add(std::make_unique<always_invalid_component>(L"bad"));
     gen.max_retries(2);
 
-    REQUIRE_THROWS(gen.generate());
+    REQUIRE_THROWS(gen.generate({}));
 
     REQUIRE(stats->component_failure_counts.at(L"bad") == 1);
 }
@@ -3320,7 +3323,7 @@ TEST_CASE("stats_observer tracks components per entity", "[ext][stats]")
     gen.add(std::make_unique<string_component>(L"a", L"A"));
     gen.add(std::make_unique<string_component>(L"b", L"B"));
 
-    gen.generate_batch(3);
+    gen.generate_batch({.count = 3});
 
     REQUIRE(stats->min_components_per_entity == 2);
     REQUIRE(stats->max_components_per_entity == 2);
@@ -3335,7 +3338,7 @@ TEST_CASE("stats_observer avg_components_per_entity helper", "[ext][stats]")
     gen.add(std::make_unique<string_component>(L"a", L"A"));
     gen.add(std::make_unique<string_component>(L"b", L"B"));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->avg_components_per_entity() == Catch::Approx(2.0));
 }
@@ -3359,7 +3362,7 @@ TEST_CASE("stats_observer value distribution for string component",
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"name", L"Alice"));
 
-    gen.generate_batch(5);
+    gen.generate_batch({.count = 5});
 
     REQUIRE(stats->value_distribution.contains(L"name"));
     REQUIRE(stats->value_distribution.at(L"name").at(L"Alice") == 5);
@@ -3373,7 +3376,7 @@ TEST_CASE("stats_observer value distribution for int component",
     gen.add_observer(stats);
     gen.add(std::make_unique<int_component>(L"age", 30));
 
-    gen.generate_batch(3);
+    gen.generate_batch({.count = 3});
 
     REQUIRE(stats->value_distribution.contains(L"age"));
     REQUIRE(stats->value_distribution.at(L"age").at(L"30") == 3);
@@ -3387,7 +3390,7 @@ TEST_CASE("stats_observer value distribution tracks multiple values",
     gen.add_observer(stats);
     gen.add(std::make_unique<random_int_component>(L"v", 1, 3));
 
-    gen.generate_batch(100);
+    gen.generate_batch({.count = 100});
 
     auto& dist = stats->value_distribution.at(L"v");
     // With range [1,3] and 100 draws, all three values should appear.
@@ -3409,7 +3412,7 @@ TEST_CASE("stats_observer component_retry_rate helper", "[ext][stats]")
     gen.add(std::make_unique<even_only_component>());
     gen.max_retries(100);
 
-    gen.generate_batch(10);
+    gen.generate_batch({.count = 10});
 
     // Rate >= 0.0. Even if no retries happened, the function returns 0.
     REQUIRE(stats->component_retry_rate() >= 0.0);
@@ -3423,7 +3426,7 @@ TEST_CASE("stats_observer entity_retry_rate helper", "[ext][stats]")
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    gen.generate_batch(5);
+    gen.generate_batch({.count = 5});
 
     // No entity-level validator, so 0 retries.
     REQUIRE(stats->entity_retry_rate() == Catch::Approx(0.0));
@@ -3453,7 +3456,7 @@ TEST_CASE("stats_observer distribution for double", "[ext][stats][distribution]"
     gen.add_observer(stats);
     gen.add(std::make_unique<double_component>(3.14));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->value_distribution.contains(L"a"));
     REQUIRE(stats->value_distribution.at(L"a").size() == 1);
@@ -3466,7 +3469,7 @@ TEST_CASE("stats_observer distribution for float", "[ext][stats][distribution]")
     gen.add_observer(stats);
     gen.add(std::make_unique<float_component>(2.5f));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->value_distribution.contains(L"a"));
     REQUIRE(stats->value_distribution.at(L"a").size() == 1);
@@ -3480,7 +3483,7 @@ TEST_CASE("stats_observer distribution for long",
     gen.add_observer(stats);
     gen.add(std::make_unique<dasmig::constant_component<long>>(L"l", 42L));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->value_distribution.at(L"l").at(L"42") == 1);
 }
@@ -3493,7 +3496,7 @@ TEST_CASE("stats_observer distribution for bool true and false",
     gen.add_observer(stats);
     gen.add(std::make_unique<bool_component>(true));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->value_distribution.at(L"b").at(L"true") == 1);
 
@@ -3501,7 +3504,7 @@ TEST_CASE("stats_observer distribution for bool true and false",
     gen.remove(L"b");
     gen.add(std::make_unique<bool_component>(false));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->value_distribution.at(L"b").at(L"false") == 1);
 }
@@ -3514,7 +3517,7 @@ TEST_CASE("stats_observer distribution for unknown type records other",
     gen.add_observer(stats);
     gen.add(std::make_unique<unknown_type_component>());
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(stats->value_distribution.at(L"a").at(L"<other>") == 1);
 }
@@ -3531,7 +3534,7 @@ TEST_CASE("stats_observer report contains all sections", "[ext][stats][report]")
     gen.add(std::make_unique<string_component>(L"name", L"Alice"));
     gen.add(std::make_unique<int_component>(L"age", 30));
 
-    gen.generate_batch(3);
+    gen.generate_batch({.count = 3});
 
     auto r = stats->report();
     REQUIRE(r.find(L"=== Entity Summary ===") != std::wstring::npos);
@@ -3566,7 +3569,7 @@ TEST_CASE("stats_observer report includes skip and failure data",
     gen.max_retries(2);
 
     // First generate: "a" skipped, "bad" fails.
-    REQUIRE_THROWS(gen.generate());
+    REQUIRE_THROWS(gen.generate({}));
 
     auto r = stats->report();
     REQUIRE(r.find(L"Skipped") != std::wstring::npos);
@@ -3583,7 +3586,7 @@ TEST_CASE("stats_observer report with retries shows retry rate",
     gen.add(std::make_unique<even_only_component>());
     gen.max_retries(100);
 
-    gen.generate_batch(5);
+    gen.generate_batch({.count = 5});
 
     auto r = stats->report();
     REQUIRE(r.find(L"Retry rate") != std::wstring::npos);
@@ -3655,7 +3658,7 @@ TEST_CASE("entity size and empty", "[entity][size]")
     gen.add(std::make_unique<string_component>(L"a", L"A"));
     gen.add(std::make_unique<string_component>(L"b", L"B"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.size() == 2);
     REQUIRE_FALSE(e.empty());
 }
@@ -3663,7 +3666,7 @@ TEST_CASE("entity size and empty", "[entity][size]")
 TEST_CASE("entity empty when no components", "[entity][size]")
 {
     dasmig::eg gen;
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.size() == 0);
     REQUIRE(e.empty());
 }
@@ -3688,7 +3691,7 @@ TEST_CASE("choice_component single element always returns it",
 
     for (int i = 0; i < 10; ++i)
     {
-        auto e = gen.generate();
+        auto e = gen.generate({});
         REQUIRE(e.get<int>(L"x") == 42);
     }
 }
@@ -3720,7 +3723,7 @@ TEST_CASE("default_to_string handles long type", "[to_string]")
     dasmig::eg gen;
     gen.add(std::make_unique<dasmig::constant_component<long>>(L"l", 99L));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     auto m = e.to_map();
     REQUIRE(m.at(L"l") == L"99");
 }
@@ -3735,7 +3738,7 @@ TEST_CASE("component validation failure message", "[error][message]")
     gen.add(std::make_unique<always_invalid_component>(L"a"));
     gen.max_retries(2);
 
-    REQUIRE_THROWS_WITH(gen.generate(),
+    REQUIRE_THROWS_WITH(gen.generate({}),
         "component validation failed after max retries");
 }
 
@@ -3743,37 +3746,37 @@ TEST_CASE("entity validation failure message", "[error][message]")
 {
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"val"));
-    gen.set_validator([](const dasmig::entity&) { return false; });
+    const auto validator = [](const dasmig::entity&) { return false; };
     gen.max_retries(1);
 
-    REQUIRE_THROWS_WITH(gen.generate(),
+    REQUIRE_THROWS_WITH(gen.generate({.validator = validator}),
         "entity validation failed after max retries");
 }
 
 TEST_CASE("generate_group unknown group message", "[error][message]")
 {
     dasmig::eg gen;
-    REQUIRE_THROWS_AS(gen.generate_group(L"nope"), std::out_of_range);
+    REQUIRE_THROWS_AS(gen.generate_group({.group = L"nope"}), std::out_of_range);
 }
 
 TEST_CASE("entity get missing key throws out_of_range", "[error][message]")
 {
     dasmig::eg gen;
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE_THROWS_AS(e.get<int>(L"nope"), std::out_of_range);
 }
 
 TEST_CASE("entity get_any missing key throws out_of_range", "[error][message]")
 {
     dasmig::eg gen;
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE_THROWS_AS(e.get_any(L"nope"), std::out_of_range);
 }
 
 TEST_CASE("entity seed missing key throws out_of_range", "[error][message]")
 {
     dasmig::eg gen;
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE_THROWS_AS(e.seed(L"nope"), std::out_of_range);
 }
 
@@ -3792,7 +3795,7 @@ TEST_CASE("generate_batch zero returns empty vector", "[batch][boundary]")
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    REQUIRE(gen.generate_batch(0).empty());
+    REQUIRE(gen.generate_batch({.count = 0}).empty());
 }
 
 TEST_CASE("generate_batch_async zero returns empty vector",
@@ -3801,7 +3804,7 @@ TEST_CASE("generate_batch_async zero returns empty vector",
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    REQUIRE(gen.generate_batch_async(0).empty());
+    REQUIRE(gen.generate_batch_async({.count = 0}).empty());
 }
 
 TEST_CASE("max_retries zero throws on first validation failure",
@@ -3811,7 +3814,7 @@ TEST_CASE("max_retries zero throws on first validation failure",
     gen.add(std::make_unique<always_invalid_component>(L"a"));
     gen.max_retries(0);
 
-    REQUIRE_THROWS_WITH(gen.generate(),
+    REQUIRE_THROWS_WITH(gen.generate({}),
         "component validation failed after max retries");
 }
 
@@ -3820,7 +3823,7 @@ TEST_CASE("empty string as component key works", "[registration][boundary]")
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"", L"val"));
 
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.has(L""));
     REQUIRE(e.get<std::wstring>(L"") == L"val");
 }
@@ -3833,7 +3836,7 @@ TEST_CASE("range_component lo equals hi returns that value",
 
     for (int i = 0; i < 10; ++i)
     {
-        auto e = gen.generate();
+        auto e = gen.generate({});
         REQUIRE(e.get<int>(L"x") == 7);
     }
 }
@@ -3850,7 +3853,7 @@ TEST_CASE("weight override persists when component is replaced",
     gen.add(std::make_unique<string_component>(L"a", L"new"));
 
     // Weight override 0.0 was set for key "a" and should persist.
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE_FALSE(e.has(L"a"));
 }
 
@@ -3865,7 +3868,7 @@ TEST_CASE("group with nonexistent component keys produces empty entity",
     gen.add(std::make_unique<string_component>(L"a", L"A"));
     gen.add_group(L"g", {L"a", L"missing"});
 
-    auto e = gen.generate_group(L"g");
+    auto e = gen.generate_group({.group = L"g"});
     REQUIRE(e.has(L"a"));
     REQUIRE_FALSE(e.has(L"missing"));
 }
@@ -3877,7 +3880,7 @@ TEST_CASE("group with empty key list produces empty entity",
     gen.add(std::make_unique<string_component>(L"a", L"A"));
     gen.add_group(L"empty", {});
 
-    auto e = gen.generate_group(L"empty");
+    auto e = gen.generate_group({.group = L"empty"});
     REQUIRE(e.empty());
 }
 
@@ -3901,7 +3904,7 @@ TEST_CASE("eg move-assignment transfers components", "[eg][move]")
     gen2 = std::move(gen1);
 
     REQUIRE(gen2.has(L"a"));
-    auto e = gen2.generate();
+    auto e = gen2.generate({});
     REQUIRE(e.get<std::wstring>(L"a") == L"A");
 }
 
@@ -3920,7 +3923,7 @@ TEST_CASE("callback_component propagates exception from callable",
             throw std::runtime_error("boom");
         }));
 
-    REQUIRE_THROWS_WITH(gen.generate(), "boom");
+    REQUIRE_THROWS_WITH(gen.generate({}), "boom");
 }
 
 // ---------------------------------------------------------------------------
@@ -3950,7 +3953,7 @@ TEST_CASE("multiple observers fire in registration order",
     gen.add_observer(obs2);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
 
-    gen.generate();
+    gen.generate({});
 
     REQUIRE(log->size() == 2);
     REQUIRE((*log)[0] == 1);
@@ -3966,10 +3969,10 @@ TEST_CASE("generate_batch_async propagates validation failure",
 {
     dasmig::eg gen;
     gen.add(std::make_unique<string_component>(L"a", L"val"));
-    gen.set_validator([](const dasmig::entity&) { return false; });
+    const auto validator = [](const dasmig::entity&) { return false; };
     gen.max_retries(1);
 
-    REQUIRE_THROWS(gen.generate_batch_async(3));
+    REQUIRE_THROWS(gen.generate_batch_async({.count = 3, .validator = validator}));
 }
 
 // ---------------------------------------------------------------------------
@@ -3983,7 +3986,7 @@ TEST_CASE("stats_observer stream operator outputs report",
     dasmig::eg gen;
     gen.add_observer(stats);
     gen.add(std::make_unique<string_component>(L"a", L"val"));
-    gen.generate();
+    gen.generate({});
 
     std::wostringstream wos;
     wos << *stats;
@@ -3998,7 +4001,7 @@ TEST_CASE("entity to_string on empty entity returns empty string",
           "[entity][to_string]")
 {
     dasmig::eg gen;
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.to_string().empty());
 }
 
@@ -4006,7 +4009,7 @@ TEST_CASE("entity to_map on empty entity returns empty map",
           "[entity][to_map]")
 {
     dasmig::eg gen;
-    auto e = gen.generate();
+    auto e = gen.generate({});
     REQUIRE(e.to_map().empty());
 }
 
@@ -4049,13 +4052,13 @@ TEST_CASE("known answers for fixed seeds", "[kat]")
 {
     dasmig::eg g;
     add_kat_components(g);
-    REQUIRE(g.generate(1).to_json() ==
+    REQUIRE(g.generate({}, 1).to_json() ==
             R"({"components":{"class":"warrior","level":47,"luck":0.8571650338411319,"rarity":"common","alive":true,"gold":34},"signature":{"seed":"0000000000000001","data":"0000000000000000"}})");
-    REQUIRE(g.generate(2).to_json() ==
+    REQUIRE(g.generate({}, 2).to_json() ==
             R"({"components":{"class":"cleric","level":26,"luck":0.11324040919136602,"rarity":"common","alive":true,"gold":870},"signature":{"seed":"0000000000000002","data":"0000000000000000"}})");
 
     std::uint64_t h = 0xcbf29ce484222325ULL;
-    for (const auto& e : g.generate_batch(10000, 7)) h = fnv1a(e.to_json(), h);
+    for (const auto& e : g.generate_batch({.count = 10000}, 7)) h = fnv1a(e.to_json(), h);
     REQUIRE(h == 0xff5e8a58727602b3ULL);
 }
 
@@ -4067,11 +4070,11 @@ TEST_CASE("adding or removing a component does not change the others", "[seed][k
 {
     dasmig::eg g;
     add_kat_components(g);
-    const auto before = g.generate(5);
+    const auto before = g.generate({}, 5);
 
     g.add(std::make_unique<dasmig::range_component<int>>(L"extra", 1, 100));
     g.remove(L"class");
-    const auto after = g.generate(5);
+    const auto after = g.generate({}, 5);
     for (const auto* key : {L"level", L"rarity", L"alive"})
     {
         REQUIRE(after.to_map().at(key) == before.to_map().at(key));
@@ -4084,12 +4087,12 @@ TEST_CASE("entity::seed() replays the entity, also after entity retries", "[seed
 {
     dasmig::eg g;
     g.add(std::make_unique<dasmig::range_component<int>>(L"roll", 1, 6));
-    g.set_validator([](const dasmig::entity& e) { return e.get<int>(L"roll") == 6; });
+    const auto validator = [](const dasmig::entity& e) { return e.get<int>(L"roll") == 6; };
     g.max_retries(200);
 
-    const auto e = g.generate(11);
+    const auto e = g.generate({.validator = validator}, 11);
     REQUIRE(e.get<int>(L"roll") == 6);
-    const auto replay = g.generate(e.seed());
+    const auto replay = g.generate({.validator = validator}, e.seed());
     REQUIRE(replay.to_json() == e.to_json());
 }
 
@@ -4097,20 +4100,17 @@ TEST_CASE("seeded batch and async batch give the same entities", "[batch][async]
 {
     dasmig::eg g;
     add_kat_components(g);
-    const auto batch = g.generate_batch(50, 99);
-    const auto async = g.generate_batch_async(50, 99);
+    const auto batch = g.generate_batch({.count = 50}, 99);
+    const auto async = g.generate_batch_async({.count = 50}, 99);
     REQUIRE(batch.size() == async.size());
     for (std::size_t i = 0; i < batch.size(); ++i)
     {
         REQUIRE(batch[i].to_json() == async[i].to_json());
-        REQUIRE(g.generate(batch[i].seed()).to_json() == batch[i].to_json());
+        REQUIRE(g.generate({}, batch[i].seed()).to_json() == batch[i].to_json());
     }
 
-    // Unseeded: the same engine state gives the same batch both ways.
-    g.seed(3);
-    const auto a = g.generate_batch(5);
-    g.seed(3);
-    const auto b = g.generate_batch_async(5);
+    const auto a = g.generate_batch({.count = 5}, 3);
+    const auto b = g.generate_batch_async({.count = 5}, 3);
     for (std::size_t i = 0; i < a.size(); ++i) REQUIRE(a[i].to_json() == b[i].to_json());
 }
 
@@ -4118,7 +4118,7 @@ TEST_CASE("64-bit seeds differing only in their high bits differ", "[seed]")
 {
     dasmig::eg g;
     add_kat_components(g);
-    REQUIRE(g.generate(1).to_json() != g.generate(1 | (1ULL << 40U)).to_json());
+    REQUIRE(g.generate({}, 1).to_json() != g.generate({}, 1 | (1ULL << 40U)).to_json());
 }
 
 // ---------------------------------------------------------------------------
@@ -4160,10 +4160,10 @@ TEST_CASE("to_json writes typed values", "[json]")
                                                                   std::numeric_limits<double>::quiet_NaN()))
         .add(std::make_unique<dasmig::constant_component<long long>>(L"big", -9000000000LL))
         .add(std::make_unique<point_component>());
-    const auto json = g.generate(1).to_json();
+    const auto json = g.generate({}, 1).to_json();
     REQUIRE(json.starts_with("{\"components\":{\"name\":\"Jo\xC3\xA3o \\\"JJ\\\"\",\"nan\":null,\"big\":-9000000000,\"point\":\""));
     REQUIRE(json.ends_with(R"("signature":{"seed":"0000000000000001","data":"0000000000000000"}})"));
-    REQUIRE(g.generate(1).signature().seed == 1);
+    REQUIRE(g.generate({}, 1).signature().seed == 1);
 }
 
 // ---------------------------------------------------------------------------
@@ -4186,8 +4186,187 @@ TEST_CASE("float range_component stays below hi", "[components]")
     g.add(std::make_unique<dasmig::range_component<float>>(L"f", 0.0f, 1.0f));
     for (std::uint64_t s = 0; s < 2000; ++s)
     {
-        const auto v = g.generate(s).get<float>(L"f");
+        const auto v = g.generate({}, s).get<float>(L"f");
         REQUIRE(v >= 0.0f);
         REQUIRE(v < 1.0f);
     }
+}
+
+TEST_CASE("entity_request defaults preserve full generation", "[request]")
+{
+    const dasmig::entity_request request{};
+    REQUIRE_FALSE(request.component_keys.has_value());
+    REQUIRE_FALSE(request.group.has_value());
+    REQUIRE(request.count == 1);
+    REQUIRE_FALSE(request.validator);
+
+    dasmig::eg gen;
+    gen.add(std::make_unique<int_component>(L"first", 1))
+       .add(std::make_unique<int_component>(L"second", 2));
+    REQUIRE(gen.generate(request, 0).size() == 2);
+    REQUIRE(gen.generate(request, 0).seed() == 0);
+    REQUIRE(gen.generate_batch(request, 0).size() == 1);
+    REQUIRE(gen.generate_batch_async(request, 0).size() == 1);
+    REQUIRE(gen.generate_batch(request).size() == 1);
+    REQUIRE(gen.generate_batch_async(request).size() == 1);
+}
+
+TEST_CASE("request key selection is owned and does not leak", "[request][filtered]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<int_component>(L"a", 1))
+       .add(std::make_unique<int_component>(L"b", 2));
+    std::vector<std::wstring> keys{L"b", L"a", L"a", L"unknown"};
+    const dasmig::entity_request request{.component_keys = keys};
+    keys.clear();
+
+    REQUIRE(gen.generate(request, 42).keys() == gen.component_keys());
+    auto subset = request;
+    subset.component_keys = std::vector<std::wstring>{L"b"};
+    REQUIRE(gen.generate(subset, 42).keys() == std::vector<std::wstring>{L"b"});
+    REQUIRE(gen.generate({}, 42).size() == 2);
+    REQUIRE(request.component_keys->size() == 4);
+}
+
+TEST_CASE("explicit empty request selection generates no components", "[request][filtered][batch]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<int_component>(L"a", 1));
+    const dasmig::entity_request request{
+        .component_keys = std::vector<std::wstring>{}, .count = 2};
+    REQUIRE(gen.generate(request, 42).empty());
+    const auto batch = gen.generate_batch(request, 42);
+    const auto async = gen.generate_batch_async(request, 42);
+    REQUIRE(batch.size() == 2);
+    REQUIRE(async.size() == 2);
+    for (std::size_t i = 0; i < batch.size(); ++i)
+    {
+        REQUIRE(batch[i].empty());
+        REQUIRE(async[i].to_json() == batch[i].to_json());
+    }
+    REQUIRE(gen.generate({}, 42).has(L"a"));
+}
+
+TEST_CASE("one request selects and validates across generation methods", "[request][group][batch][async]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<random_int_component>(L"a", 1, 100))
+       .add(std::make_unique<random_int_component>(L"b", 1, 100))
+       .add(std::make_unique<random_int_component>(L"c", 1, 100));
+    gen.add_group(L"selected", {L"c", L"a", L"unknown"});
+    const dasmig::entity_request request{
+        .group = L"selected", .count = 4,
+        .validator = [](const dasmig::entity& e) {
+            return e.size() == 2 && e.has(L"a") && e.has(L"c") && !e.has(L"b");
+        }};
+
+    const auto e = gen.generate(request, 42);
+    REQUIRE(e.keys() == (std::vector<std::wstring>{L"a", L"c"}));
+    REQUIRE(gen.generate_group(request, 42).to_json() == e.to_json());
+    REQUIRE(gen.generate_group(request).size() == 2);
+    const auto batch = gen.generate_batch(request, 42);
+    const auto async = gen.generate_batch_async(request, 42);
+    REQUIRE(batch.size() == request.count);
+    REQUIRE(async.size() == request.count);
+    for (std::size_t i = 0; i < batch.size(); ++i)
+    {
+        REQUIRE(batch[i].keys() == e.keys());
+        REQUIRE(batch[i].to_json() == async[i].to_json());
+        REQUIRE(gen.generate(request, batch[i].seed()).to_json() == batch[i].to_json());
+    }
+}
+
+TEST_CASE("key selection and validator apply to both batch paths", "[request][filtered][batch][async]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<int_component>(L"a", 1))
+       .add(std::make_unique<int_component>(L"b", 2));
+    const dasmig::entity_request request{
+        .component_keys = std::vector<std::wstring>{L"b"}, .count = 3,
+        .validator = [](const dasmig::entity& e) {
+            return e.size() == 1 && e.get<int>(L"b") == 2;
+        }};
+    for (const auto& batch : {gen.generate_batch(request),
+                             gen.generate_batch_async(request)})
+    {
+        REQUIRE(batch.size() == 3);
+        for (const auto& e : batch)
+            REQUIRE(e.keys() == std::vector<std::wstring>{L"b"});
+    }
+}
+
+TEST_CASE("ambiguous request selection fails before generation hooks", "[request][error]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<int_component>(L"a", 1));
+    gen.add_group(L"group", {L"a"});
+    auto obs = std::make_shared<test_observer>();
+    gen.add_observer(obs);
+    const dasmig::entity_request request{
+        .component_keys = std::vector<std::wstring>{}, .group = L"group", .count = 0};
+
+    REQUIRE_THROWS_AS(gen.generate(request), std::invalid_argument);
+    REQUIRE_THROWS_AS(gen.generate(request, 42), std::invalid_argument);
+    REQUIRE_THROWS_AS(gen.generate_group(request), std::invalid_argument);
+    REQUIRE_THROWS_AS(gen.generate_group(request, 42), std::invalid_argument);
+    REQUIRE_THROWS_AS(gen.generate_batch(request), std::invalid_argument);
+    REQUIRE_THROWS_AS(gen.generate_batch(request, 42), std::invalid_argument);
+    REQUIRE_THROWS_AS(gen.generate_batch_async(request), std::invalid_argument);
+    REQUIRE_THROWS_AS(gen.generate_batch_async(request, 42), std::invalid_argument);
+    REQUIRE(obs->events.empty());
+}
+
+TEST_CASE("group generation requires a group in the request", "[request][group][error]")
+{
+    dasmig::eg gen;
+    REQUIRE_THROWS_WITH(gen.generate_group({}), "generate_group requires a group");
+    REQUIRE_THROWS_AS(gen.generate_group({}, 42), std::invalid_argument);
+    const dasmig::entity_request missing{.group = L"missing", .count = 0};
+    REQUIRE_THROWS_AS(gen.generate(missing), std::out_of_range);
+    REQUIRE_THROWS_AS(gen.generate(missing, 42), std::out_of_range);
+    REQUIRE_THROWS_AS(gen.generate_batch(missing), std::out_of_range);
+    REQUIRE_THROWS_AS(gen.generate_batch(missing, 42), std::out_of_range);
+    REQUIRE_THROWS_AS(gen.generate_batch_async(missing), std::out_of_range);
+    REQUIRE_THROWS_AS(gen.generate_batch_async(missing, 42), std::out_of_range);
+}
+
+TEST_CASE("request validator uses the instance retry policy", "[request][validation]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<int_component>(L"a", 1));
+    std::size_t calls = 0;
+    const dasmig::entity_request request{
+        .validator = [&calls](const dasmig::entity&) {
+            ++calls;
+            return false;
+        }};
+    gen.max_retries(2);
+    REQUIRE_THROWS_AS(gen.generate(request, 42), std::runtime_error);
+    REQUIRE(calls == 3);
+    REQUIRE_NOTHROW(gen.generate({}, 42));
+    gen.max_retries(0);
+    calls = 0;
+    REQUIRE_THROWS_AS(gen.generate(request, 42), std::runtime_error);
+    REQUIRE(calls == 1);
+}
+
+TEST_CASE("zero batch count performs no generation or validation", "[request][batch]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<int_component>(L"a", 1));
+    auto obs = std::make_shared<test_observer>();
+    gen.add_observer(obs);
+    std::atomic<std::size_t> calls{0};
+    const dasmig::entity_request request{
+        .count = 0,
+        .validator = [&calls](const dasmig::entity&) {
+            ++calls;
+            return false;
+        }};
+    REQUIRE(gen.generate_batch(request, 42).empty());
+    REQUIRE(gen.generate_batch_async(request, 42).empty());
+    REQUIRE(gen.generate_batch(request).empty());
+    REQUIRE(gen.generate_batch_async(request).empty());
+    REQUIRE(calls == 0);
+    REQUIRE(obs->events.empty());
 }
