@@ -206,7 +206,7 @@ gen.add(field(L"birth_year", [](const dasmig::generation_context& ctx) {
 }));
 
 const dasmig::entity_request request{
-    .inputs = {{"country", std::string{"PT"}}, {"reference_year", std::int64_t{2026}}}};
+    .inputs = { {"country", std::string{"PT"}}, {"reference_year", std::int64_t{2026}} }};
 auto e = gen.generate(request, 42);
 ```
 
@@ -478,7 +478,7 @@ gen.add(field(L"place", place_fn));
 })
 ```
 
-Objects keep their members in the order given: `dasmig::json_value::object{{"city", "Lisbon"}, {"lat", 38.7}}`. A non-finite number is written as null.
+Objects keep their members in the order given: `dasmig::json_value::object{ {"city", "Lisbon"}, {"lat", 38.7} }`. A non-finite number is written as null.
 
 ## Structured Serialization
 
