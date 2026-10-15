@@ -53,11 +53,15 @@ class json_value
 
     json_value() = default;                          ///< null.
     json_value(std::nullptr_t) {}                    ///< null. // NOLINT(google-explicit-constructor)
-    json_value(bool b) : _v{b} {}                    ///< A boolean. // NOLINT(google-explicit-constructor)
     json_value(std::string s) : _v{std::move(s)} {}  ///< A string (UTF-8). // NOLINT(google-explicit-constructor)
     json_value(const char* s) : _v{std::string{s}} {} ///< A string (UTF-8). // NOLINT(google-explicit-constructor)
     json_value(array a) : _v{std::move(a)} {}        ///< An array. // NOLINT(google-explicit-constructor)
     json_value(object o) : _v{std::move(o)} {}       ///< An object. // NOLINT(google-explicit-constructor)
+
+    /// @brief A boolean. Only `bool` itself: a pointer (such as a wide
+    ///        literal `L"..."`) would otherwise convert and write `true`.
+    template <std::same_as<bool> B>
+    json_value(B b) : _v{b} {} // NOLINT(google-explicit-constructor)
 
     /// @brief An integer.
     template <std::integral I>

@@ -4425,6 +4425,19 @@ TEST_CASE("json_value holds arrays and objects", "[json][v4]")
     REQUIRE(w.str() == R"({"a":1,"b":[true,null,"x",2.5],"c":{"d":-3},"nan":null})");
 }
 
+TEST_CASE("json_value takes booleans but not pointers", "[json][v4]")
+{
+    STATIC_REQUIRE(std::is_convertible_v<bool, dasmig::json_value>);
+    STATIC_REQUIRE(std::is_convertible_v<const char*, dasmig::json_value>);
+    // A wide literal would become true through the pointer-to-bool conversion.
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<const wchar_t*, dasmig::json_value>);
+    STATIC_REQUIRE_FALSE(std::is_convertible_v<const int*, dasmig::json_value>);
+
+    dasmig::core::json_writer w;
+    dasmig::json_value{dasmig::json_value::array{true, false}}.write(w);
+    REQUIRE(w.str() == "[true,false]");
+}
+
 TEST_CASE("a component can return an object with arrays", "[json][v4]")
 {
     dasmig::eg gen;
