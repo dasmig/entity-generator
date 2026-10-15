@@ -456,6 +456,34 @@ int main()
         std::wcout << e << L'\n';
     }
 
+    // A small composition: per-call inputs, dependencies, fields and a
+    // nested JSON document (the shape a persona generator builds on).
+    std::wcout << L"\n--- Inputs, dependencies and fields ---\n";
+    {
+        using dasmig::field;
+        using dasmig::generation_context;
+        dasmig::eg gen;
+        // Registered before its dependency on purpose: it is ordered after it.
+        gen.add(field(L"person.job", [](const generation_context& ctx) {
+                    return std::wstring{ctx.get<int>(L"person.age") < 65 ? L"clerk" : L"retired"};
+                })
+                    .label(L"Job")
+                    .depends_on({L"person.age"}));
+        gen.add(field(L"person.country", [](const generation_context& ctx) {
+                    return ctx.input_or<std::string>("country", "BR");
+                })
+                    .label(L"Country"));
+        gen.add(field(L"person.age", [](const generation_context& ctx) {
+                    return dasmig::core::uniform_int(ctx.random(), 18, 90);
+                })
+                    .label(L"Age"));
+
+        const dasmig::entity_request request{.inputs = {{"country", std::string{"PT"}}}};
+        const auto e = gen.generate(request, 42);
+        std::wcout << e << L'\n';
+        std::wcout << dasmig::core::from_utf8(e.to_json()) << L'\n';
+    }
+
     // Error handling.
     std::wcout << L"\n--- Error handling ---\n";
     try
