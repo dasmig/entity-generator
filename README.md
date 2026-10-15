@@ -21,7 +21,9 @@
 
 - **Generic Components** — Ready-made templates for common patterns: `constant_component<T>`, `choice_component<T>`, `range_component<T>`, `callback_component`, and `weighted_choice_component<T>`. All accept an optional custom formatter.
 
-- **Request-First API** — `entity_request` carries component selection, group, batch count, and entity validation for each call. Generation methods accept `(request)` or `(request, seed)`; setup stays on the instance.
+- **Request-First API** — `entity_request` carries component selection, group, batch count, entity validation and per-call `inputs` (a country, a reference date, ...) for each call. Generation methods accept `(request)` or `(request, seed)`; setup stays on the instance.
+
+- **Dependencies & Fields** — A component declares `depends_on()`: a request pulls in what it needs, orders it, and skips a component whose dependency was skipped. `field(key, fn)` builds a component in one expression, with a label, formatter, JSON mapper, validator and condition.
 
 - **Randomness & Replay** — Explicit per-call seeds and caller-owned deterministic sequences. Every entity and component stores its seed for full replay via seed signatures; `generate(request, e.seed())` reproduces an entity with the same request and setup.
 
@@ -35,7 +37,7 @@
 
 - **ECS Integration** — Optional adapter headers for [EnTT](https://github.com/skypjack/entt) and [Flecs](https://github.com/SanderMertens/flecs). Register key→component mappings, then `spawn()` converts generated entities into typed ECS entities.
 
-- **Serialization** — `entity.to_string()`, `operator<<`, `entity.to_map()` for structured key–value export, and `entity.to_json()` with typed values and the replay seed.
+- **Serialization** — `entity.to_string()`, `operator<<`, `entity.to_map()` for structured key–value export, and `entity.to_json()` with typed values, arrays, objects, nested documents from dotted keys (`identity.age`), and a replay signature that covers the inputs and the data behind the components.
 
 - **Composable & Thread-Safe** — Components can wrap [name-generator](https://github.com/dasmig/name-generator) and [nickname-generator](https://github.com/dasmig/nickname-generator). Independent `eg` instances enable lock-free concurrent generation.
 

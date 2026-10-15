@@ -4,6 +4,7 @@
 #include "core.hpp"
 #include <algorithm>
 #include <any>
+#include <bit>
 #include <cmath>
 #include <concepts>
 #include <cstddef>
@@ -17,10 +18,13 @@
 #include <optional>
 #include <ostream>
 #include <ranges>
+#include <set>
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <type_traits>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -34,10 +38,90 @@ DASMIG_CORE_REQUIRE(1, 0);
 namespace dasmig
 {
 
-/// @brief A component value as JSON: null, a boolean, an integer, a number
-///        or a (UTF-8) string.
+/// @brief A component value as JSON: null, a boolean, an integer, a number,
+///        a (UTF-8) string, an array or an object.
+///
+/// Objects keep their members in the order given. Integers convert
+/// implicitly to an integer value, floating-point numbers to a number
+/// (non-finite ones are written as null).
 /// @see component::to_json()
-using json_value = std::variant<std::nullptr_t, bool, std::int64_t, double, std::string>;
+class json_value
+{
+  public:
+    using array = std::vector<json_value>;                          ///< A JSON array.
+    using object = std::vector<std::pair<std::string, json_value>>; ///< A JSON object, members in order.
+
+    json_value() = default;                          ///< null.
+    json_value(std::nullptr_t) {}                    ///< null. // NOLINT(google-explicit-constructor)
+    json_value(bool b) : _v{b} {}                    ///< A boolean. // NOLINT(google-explicit-constructor)
+    json_value(std::string s) : _v{std::move(s)} {}  ///< A string (UTF-8). // NOLINT(google-explicit-constructor)
+    json_value(const char* s) : _v{std::string{s}} {} ///< A string (UTF-8). // NOLINT(google-explicit-constructor)
+    json_value(array a) : _v{std::move(a)} {}        ///< An array. // NOLINT(google-explicit-constructor)
+    json_value(object o) : _v{std::move(o)} {}       ///< An object. // NOLINT(google-explicit-constructor)
+
+    /// @brief An integer.
+    template <std::integral I>
+        requires(!std::same_as<I, bool>)
+    json_value(I n) : _v{static_cast<std::int64_t>(n)} {} // NOLINT(google-explicit-constructor)
+
+    /// @brief A number; a non-finite one is null.
+    template <std::floating_point F>
+    json_value(F d) // NOLINT(google-explicit-constructor)
+    {
+        const auto x = static_cast<double>(d);
+        if (std::isfinite(x)) _v = x;
+    }
+
+    /// @brief The array held, or null when this is not an array.
+    [[nodiscard]] const array* get_array() const { return std::get_if<array>(&_v); }
+    /// @brief The object held, or null when this is not an object.
+    [[nodiscard]] const object* get_object() const { return std::get_if<object>(&_v); }
+    /// @brief The object held, or null when this is not an object.
+    [[nodiscard]] object* get_object() { return std::get_if<object>(&_v); }
+
+    /// @brief Write this value.
+    /// @param w Writer positioned where a value is allowed.
+    void write(core::json_writer& w) const
+    {
+        std::visit(
+            [&w](const auto& x) {
+                using X = std::decay_t<decltype(x)>;
+                if constexpr (std::is_same_v<X, array>)
+                {
+                    w.begin_array();
+                    for (const auto& item : x) item.write(w);
+                    w.end_array();
+                }
+                else if constexpr (std::is_same_v<X, object>)
+                {
+                    w.begin_object();
+                    for (const auto& [name, item] : x)
+                    {
+                        w.key(name);
+                        item.write(w);
+                    }
+                    w.end_object();
+                }
+                else
+                {
+                    w.value(x);
+                }
+            },
+            _v);
+    }
+
+  private:
+    std::variant<std::nullptr_t, bool, std::int64_t, double, std::string, array, object> _v;
+};
+
+/// @brief A per-call input value: a boolean, an integer, a number or a string.
+///
+/// Scalars only, so the inputs can be part of the replay signature.
+/// @see entity_request::inputs, generation_context::input()
+using input_value = std::variant<bool, std::int64_t, double, std::string>;
+
+/// @brief Per-call inputs by name (ordered, so their hash is reproducible).
+using input_map = std::map<std::string, input_value, std::less<>>;
 
 // Forward declaration.
 class eg;
@@ -63,11 +147,89 @@ class generation_context
     /// @tparam T The expected type of the stored value.
     /// @param component_key The component key to retrieve.
     /// @return The value cast to @p T.
+    /// @throws std::out_of_range If no value for the key was generated (the
+    ///         message names the key); declare the dependency with
+    ///         component::depends_on() so a request pulls it in.
     /// @throws std::bad_any_cast If @p T does not match the stored type.
     template <typename T>
     [[nodiscard]] T get(const std::wstring& component_key) const
     {
-        return std::any_cast<T>(_values.at(component_key));
+        const auto it = _values.find(component_key);
+        if (it == _values.end())
+        {
+            throw std::out_of_range("component '" + core::to_utf8(component_key) +
+                                    "' has not been generated");
+        }
+        return std::any_cast<T>(it->second);
+    }
+
+    /// @brief Typed retrieval that tolerates a missing value.
+    /// @tparam T The expected type of the stored value.
+    /// @param component_key The component key to retrieve.
+    /// @return The value, or an empty optional if none was generated.
+    /// @throws std::bad_any_cast If @p T does not match the stored type.
+    template <typename T>
+    [[nodiscard]] std::optional<T> try_get(const std::wstring& component_key) const
+    {
+        const auto it = _values.find(component_key);
+        if (it == _values.end()) return std::nullopt;
+        return std::any_cast<T>(it->second);
+    }
+
+    /// @brief Typed retrieval with a fallback.
+    /// @tparam T The expected type of the stored value.
+    /// @param component_key The component key to retrieve.
+    /// @param fallback Returned when no value was generated.
+    /// @return The value, or @p fallback.
+    /// @throws std::bad_any_cast If @p T does not match the stored type.
+    template <typename T>
+    [[nodiscard]] T get_or(const std::wstring& component_key, T fallback) const
+    {
+        const auto it = _values.find(component_key);
+        return it == _values.end() ? std::move(fallback) : std::any_cast<T>(it->second);
+    }
+
+    /// @brief Check whether the request supplied an input.
+    /// @param name The input name.
+    /// @return `true` if entity_request::inputs has the name.
+    [[nodiscard]] bool has_input(std::string_view name) const
+    {
+        return _inputs != nullptr && _inputs->find(name) != _inputs->end();
+    }
+
+    /// @brief A per-call input from the request.
+    /// @tparam T One of `bool`, `std::int64_t`, `double`, `std::string`: the
+    ///         type the input was given with.
+    /// @param name The input name.
+    /// @return The value.
+    /// @throws std::invalid_argument If the request has no such input, or it
+    ///         has another type (the message names the input).
+    template <typename T>
+    [[nodiscard]] T input(std::string_view name) const
+    {
+        const auto it = _inputs == nullptr ? input_map::const_iterator{} : _inputs->find(name);
+        if (_inputs == nullptr || it == _inputs->end())
+        {
+            throw std::invalid_argument("input '" + std::string{name} + "' was not supplied");
+        }
+        const T* value = std::get_if<T>(&it->second);
+        if (value == nullptr)
+        {
+            throw std::invalid_argument("input '" + std::string{name} + "' has another type");
+        }
+        return *value;
+    }
+
+    /// @brief A per-call input, or a fallback when the request has none.
+    /// @tparam T The input type, as for input().
+    /// @param name The input name.
+    /// @param fallback Returned when the input was not supplied.
+    /// @return The value, or @p fallback.
+    /// @throws std::invalid_argument If the input has another type.
+    template <typename T>
+    [[nodiscard]] T input_or(std::string_view name, T fallback) const
+    {
+        return has_input(name) ? input<T>(name) : std::move(fallback);
     }
 
     /// @brief Access the random engine for this component.
@@ -92,6 +254,9 @@ class generation_context
 
     // Already-generated component values indexed by key.
     std::map<std::wstring, std::any> _values;
+
+    // The request's inputs (owned by the request, which outlives the call).
+    const input_map* _inputs{nullptr};
 
     // Per-component engine, reseeded before each component generates.
     mutable core::rng _random{0};
@@ -140,13 +305,39 @@ class component
     /// The default writes `bool` as a boolean, integers as integers,
     /// `double` and `float` as numbers (non-finite ones as null),
     /// `std::wstring` and `std::string` as strings, and anything else as the
-    /// string from to_string(). Override it to write a richer value.
+    /// string from to_string(). Override it to write a richer value: a
+    /// json_value can hold arrays and objects.
     /// @param value The value previously returned by generate().
     /// @return The JSON value.
     [[nodiscard]] virtual json_value to_json(const std::any& value) const
     {
         return default_to_json(value, to_string(value));
     }
+
+    /// @brief Display name of this component, used by entity::to_string().
+    ///
+    /// The key stays the identifier (lookups, seeds, JSON). A key with dots
+    /// is a path: `L"identity.age"` is written as `{"identity":{"age":..}}`.
+    /// @return The label; defaults to the key.
+    [[nodiscard]] virtual std::wstring label() const { return key(); }
+
+    /// @brief Keys of the components this one reads from the context.
+    ///
+    /// A request that selects this component also generates its dependencies
+    /// (transitively) and orders them before it, whatever the registration
+    /// order. If a dependency is skipped (weight roll or should_generate()),
+    /// this component is skipped too. A dependency that is not registered, or
+    /// a cycle, makes generation throw.
+    /// @return The dependency keys; empty by default.
+    [[nodiscard]] virtual std::vector<std::wstring> depends_on() const { return {}; }
+
+    /// @brief Hash of the data this component draws from, for replay.
+    ///
+    /// A component that calls a generator with data returns that generator's
+    /// `data_hash()`. entity::signature() combines the hashes of the components
+    /// that ran, so a replay shows whether the data changed.
+    /// @return The hash; 0 (no data) by default.
+    [[nodiscard]] virtual std::uint64_t data_hash() const { return 0; }
 
     /// @brief Inclusion weight for this component (0.0 to 1.0).
     ///
@@ -181,8 +372,9 @@ class component
   protected:
     /// @brief Default conversion covering common standard types.
     ///
-    /// Handles `std::wstring`, `int`, `double`, `float`, `long`, and `bool`.
-    /// Returns `"[?]"` for unrecognized types.
+    /// Handles `std::wstring`, `std::string` (UTF-8), `bool`, `float`,
+    /// `double` and the integer types `int`, `long`, `long long` and their
+    /// unsigned forms. Returns `"[?]"` for unrecognized types.
     /// @param value The value to convert.
     /// @return A wide-string representation.
     [[nodiscard]] static std::wstring default_to_string(const std::any& value)
@@ -211,6 +403,26 @@ class component
         {
             return std::any_cast<bool>(value) ? L"true" : L"false";
         }
+        if (value.type() == typeid(std::string))
+        {
+            return core::from_utf8(std::any_cast<const std::string&>(value));
+        }
+        if (value.type() == typeid(long long))
+        {
+            return std::to_wstring(std::any_cast<long long>(value));
+        }
+        if (value.type() == typeid(unsigned))
+        {
+            return std::to_wstring(std::any_cast<unsigned>(value));
+        }
+        if (value.type() == typeid(unsigned long))
+        {
+            return std::to_wstring(std::any_cast<unsigned long>(value));
+        }
+        if (value.type() == typeid(unsigned long long))
+        {
+            return std::to_wstring(std::any_cast<unsigned long long>(value));
+        }
 
         return L"[?]";
     }
@@ -228,6 +440,16 @@ class component
         if (type == typeid(long)) return std::int64_t{std::any_cast<long>(value)};
         if (type == typeid(long long)) return std::int64_t{std::any_cast<long long>(value)};
         if (type == typeid(unsigned)) return std::int64_t{std::any_cast<unsigned>(value)};
+        // Larger unsigned values stay exact as text rather than wrapping.
+        if (type == typeid(unsigned long) || type == typeid(unsigned long long))
+        {
+            const auto n = type == typeid(unsigned long)
+                               ? static_cast<unsigned long long>(std::any_cast<unsigned long>(value))
+                               : std::any_cast<unsigned long long>(value);
+            if (n <= static_cast<unsigned long long>(std::numeric_limits<std::int64_t>::max()))
+                return static_cast<std::int64_t>(n);
+            return std::to_string(n);
+        }
         if (type == typeid(double) || type == typeid(float))
         {
             const double d = type == typeid(double) ? std::any_cast<double>(value)
@@ -433,6 +655,145 @@ callback_component(std::wstring, GenFn, Formatter = {})
            std::invoke_result_t<GenFn, const generation_context&>,
            GenFn, Formatter>;
 
+/// @brief A component built from a callable, with every optional hook set by
+///        a chained call; see field().
+///
+/// The setters work on a temporary and return it, so a field is written in
+/// one expression and passed to eg::add():
+/// @code
+/// gen.add(dasmig::field(L"identity.age", [](const dasmig::generation_context& ctx) {
+///             return ctx.get<birth>(L"birth").age;
+///         })
+///         .label(L"Age")
+///         .depends_on({L"birth"}));
+/// @endcode
+/// @tparam T The value type the callable returns.
+template <typename T>
+class field_component final : public component
+{
+  public:
+    /// @brief The callable that produces the value.
+    using generator = std::function<T(const generation_context&)>;
+
+    /// @brief Construct a field.
+    /// @param key Unique component key (dots make a path in the JSON).
+    /// @param fn Callable invoked during generation.
+    field_component(std::wstring key, generator fn) : _key{std::move(key)}, _fn{std::move(fn)} {}
+
+    /// @brief Set the display label (default: the key).
+    [[nodiscard]] field_component label(std::wstring text) &&
+    {
+        _label = std::move(text);
+        return std::move(*this);
+    }
+
+    /// @brief Declare the components this one reads; see component::depends_on().
+    [[nodiscard]] field_component depends_on(std::vector<std::wstring> keys) &&
+    {
+        _depends = std::move(keys);
+        return std::move(*this);
+    }
+
+    /// @brief Set how the value is shown by to_string().
+    [[nodiscard]] field_component format(std::function<std::wstring(const T&)> fn) &&
+    {
+        _format = std::move(fn);
+        return std::move(*this);
+    }
+
+    /// @brief Set how the value is written by to_json().
+    [[nodiscard]] field_component json(std::function<json_value(const T&)> fn) &&
+    {
+        _json = std::move(fn);
+        return std::move(*this);
+    }
+
+    /// @brief Set the inclusion weight (0.0 to 1.0); see component::weight().
+    [[nodiscard]] field_component weight(double inclusion) &&
+    {
+        _weight = inclusion;
+        return std::move(*this);
+    }
+
+    /// @brief Generate the field only when the callable returns true;
+    ///        see component::should_generate().
+    [[nodiscard]] field_component when(std::function<bool(const generation_context&)> fn) &&
+    {
+        _when = std::move(fn);
+        return std::move(*this);
+    }
+
+    /// @brief Accept only values the callable accepts; see component::validate().
+    [[nodiscard]] field_component validate(std::function<bool(const T&)> fn) &&
+    {
+        _validate = std::move(fn);
+        return std::move(*this);
+    }
+
+    /// @brief Set the hash of the data the field draws from; see component::data_hash().
+    [[nodiscard]] field_component data_hash(std::uint64_t hash) &&
+    {
+        _data_hash = hash;
+        return std::move(*this);
+    }
+
+    [[nodiscard]] std::wstring key() const override { return _key; }
+    [[nodiscard]] std::wstring label() const override { return _label.value_or(_key); }
+    [[nodiscard]] std::vector<std::wstring> depends_on() const override { return _depends; }
+    [[nodiscard]] std::uint64_t data_hash() const override { return _data_hash; }
+    [[nodiscard]] double weight() const override { return _weight; }
+
+    [[nodiscard]] std::any generate(const generation_context& ctx) const override
+    {
+        return std::any{_fn(ctx)};
+    }
+
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        return _format ? _format(std::any_cast<const T&>(value)) : default_to_string(value);
+    }
+
+    [[nodiscard]] json_value to_json(const std::any& value) const override
+    {
+        return _json ? _json(std::any_cast<const T&>(value))
+                     : default_to_json(value, to_string(value));
+    }
+
+    [[nodiscard]] bool validate(const std::any& value) const override
+    {
+        return !_validate || _validate(std::any_cast<const T&>(value));
+    }
+
+    [[nodiscard]] bool should_generate(const generation_context& ctx) const override
+    {
+        return !_when || _when(ctx);
+    }
+
+  private:
+    std::wstring _key;
+    generator _fn;
+    std::optional<std::wstring> _label;
+    std::vector<std::wstring> _depends;
+    std::function<std::wstring(const T&)> _format;
+    std::function<json_value(const T&)> _json;
+    std::function<bool(const generation_context&)> _when;
+    std::function<bool(const T&)> _validate;
+    double _weight{1.0};
+    std::uint64_t _data_hash{0};
+};
+
+/// @brief Build a field from a callable; T is what the callable returns.
+/// @param key Unique component key.
+/// @param fn Callable taking `const generation_context&`.
+/// @return The field, to be configured with chained calls and added with eg::add().
+/// @see field_component
+template <typename Fn>
+[[nodiscard]] auto field(std::wstring key, Fn fn)
+{
+    return field_component<std::invoke_result_t<Fn, const generation_context&>>{
+        std::move(key), std::move(fn)};
+}
+
 /// @brief Component that picks from a list of values using per-option weights.
 ///
 /// Weights are relative (they don't need to sum to 1.0). A weight of 0
@@ -578,28 +939,31 @@ class entity
         return _seed;
     }
 
-    /// @brief The seed this entity was generated from, in the format every
-    ///        dasmig result uses (the entity generator has no data, so
-    ///        `data` is 0).
-    /// @return The replay signature.
+    /// @brief The seed and the data this entity was generated from, in the
+    ///        format every dasmig result uses.
+    /// @return The replay signature. `data` combines the request's inputs and
+    ///         the component::data_hash() of every component that ran; it is
+    ///         0 when there are none, as for a generator without data.
     [[nodiscard]] core::seed_signature signature() const
     {
-        return {.seed = _seed, .data = 0};
+        return {.seed = _seed, .data = _data};
     }
 
     /// @brief Write this entity as a JSON object
     ///        `{"components":{"key":value,…},"signature":{…}}`, components
     ///        in generation order, values from component::to_json().
+    ///
+    /// A key with dots is a path: `identity.name` and `identity.age` are
+    /// written as members of one `identity` object, placed where its first
+    /// member comes.
     /// @param w Writer positioned where a value is allowed.
     void to_json(core::json_writer& w) const
     {
-        w.begin_object().key("components").begin_object();
-        for (const auto& e : _entries)
-        {
-            w.key(core::to_utf8(e.key));
-            std::visit([&w](const auto& v) { w.value(v); }, e.json);
-        }
-        w.end_object().key("signature");
+        json_value::object root;
+        for (const auto& e : _entries) insert_path(root, core::to_utf8(e.key), e.json);
+        w.begin_object().key("components");
+        json_value{std::move(root)}.write(w);
+        w.key("signature");
         signature().to_json(w);
         w.end_object();
     }
@@ -643,7 +1007,7 @@ class entity
 
     /// @brief Convert all component values to a single formatted string.
     ///
-    /// Each entry is rendered as `"key: display"` separated by two spaces.
+    /// Each entry is rendered as `"label: display"` separated by two spaces.
     /// @return The formatted string, or empty if the entity is empty.
     [[nodiscard]] std::wstring to_string() const
     {
@@ -653,7 +1017,7 @@ class entity
         for (const auto& e : _entries)
         {
             if (!result.empty()) result += L"  ";
-            result += e.key + L": " + e.display;
+            result += e.label + L": " + e.display;
         }
         return result;
     }
@@ -669,6 +1033,7 @@ class entity
     struct entry
     {
         std::wstring key;
+        std::wstring label;
         std::any value;
         std::wstring display;
         std::uint64_t seed;
@@ -692,11 +1057,36 @@ class entity
         return it->value;
     }
 
+    // Add a value at a dotted path, creating the objects on the way.
+    // Registration rejects keys that would collide, so a path is never both
+    // a value and an object.
+    static void insert_path(json_value::object& root, std::string_view path, const json_value& value)
+    {
+        json_value::object* level = &root;
+        for (auto dot = path.find('.'); dot != std::string_view::npos; dot = path.find('.'))
+        {
+            const std::string_view name = path.substr(0, dot);
+            path.remove_prefix(dot + 1);
+            auto it = std::ranges::find(*level, name, &json_value::object::value_type::first);
+            if (it == level->end())
+            {
+                level->emplace_back(std::string{name}, json_value::object{});
+                it = std::prev(level->end());
+            }
+            level = it->second.get_object();
+            if (level == nullptr) throw std::logic_error("component keys collide in the JSON");
+        }
+        level->emplace_back(std::string{path}, value);
+    }
+
     // Component entries in generation order.
     std::vector<entry> _entries;
 
     // Seed used to generate this entity.
     std::uint64_t _seed{0};
+
+    // Hash of the inputs and of the data the components drew from (0: none).
+    std::uint64_t _data{0};
 
     // Allows entity generator to construct entities.
     friend class eg;
@@ -827,6 +1217,12 @@ struct entity_request
     /// @brief Optional entity validator; false retries the whole entity.
     /// Concurrent batches require a thread-safe callable and captured state.
     std::function<bool(const entity&)> validator{};
+
+    /// @brief Per-call inputs for the components (a country, a reference
+    /// date, a forced sex, ...), read with generation_context::input().
+    /// They are part of the entity's replay signature. Give strings as
+    /// `std::string{"BR"}`; a bare literal also works with C++23 compilers.
+    input_map inputs{};
 };
 
 /// @brief The entity generator — produces entities with configurable components.
@@ -867,9 +1263,13 @@ class eg
     /// order they are registered.
     /// @param comp The component to register (moved).
     /// @return `*this` for chaining.
+    /// @throws std::invalid_argument If the key has an empty path segment
+    ///         (`a..b`, `.a`, `a.`), or would be both a value and the parent of
+    ///         another key (`a` with `a.b`).
     eg& add(std::unique_ptr<component> comp)
     {
         const auto key = comp->key();
+        check_key(key);
         notify(&generation_observer::on_before_add, key);
 
         auto it = std::ranges::find(_components, key, &component_entry::key);
@@ -885,6 +1285,17 @@ class eg
 
         notify(&generation_observer::on_after_add, key);
         return *this;
+    }
+
+    /// @brief Register a field built with field().
+    /// @tparam T The field's value type.
+    /// @param f The field (moved).
+    /// @return `*this` for chaining.
+    /// @throws std::invalid_argument As add(std::unique_ptr<component>).
+    template <typename T>
+    eg& add(field_component<T> f)
+    {
+        return add(std::make_unique<field_component<T>>(std::move(f)));
     }
 
     /// @brief Register a component with a weight override.
@@ -1028,7 +1439,7 @@ class eg
     [[nodiscard]] entity generate(const entity_request& request)
     {
         const auto refs = resolve_components(request);
-        return generate_seeded(refs, _engine(), request.validator);
+        return generate_seeded(refs, _engine(), request);
     }
 
     /// @brief Generate an entity using a request and a seed.
@@ -1046,8 +1457,7 @@ class eg
     [[nodiscard]] entity generate(const entity_request& request,
                                   std::uint64_t call_seed) const
     {
-        return generate_seeded(resolve_components(request), call_seed,
-                               request.validator);
+        return generate_seeded(resolve_components(request), call_seed, request);
     }
 
     /// @}
@@ -1197,6 +1607,7 @@ class eg
         std::wstring key;
         std::reference_wrapper<const component> comp;
         double effective_weight;
+        std::vector<std::wstring> depends;
     };
 
     // Type alias for the observer list.
@@ -1246,8 +1657,9 @@ class eg
     // core::rng{call_seed}.split("attempt").
     [[nodiscard]] entity generate_seeded(std::span<const component_ref> refs,
                                          std::uint64_t call_seed,
-                                         const std::function<bool(const entity&)>& validator) const
+                                         const entity_request& request) const
     {
+        const auto& validator = request.validator;
         notify_all(_observers, &generation_observer::on_before_generate);
         auto attempts = core::rng{call_seed}.split("attempt");
         std::optional<entity> accepted;
@@ -1257,7 +1669,7 @@ class eg
                 notify_all(_observers,
                     &generation_observer::on_before_entity_retry, attempt);
             const std::uint64_t entity_seed = attempt == 0 ? call_seed : attempts();
-            auto e = generate_impl(refs, entity_seed, _max_retries, _observers);
+            auto e = generate_impl(refs, entity_seed, _max_retries, _observers, request.inputs);
             if (attempt > 0)
                 notify_all(_observers,
                     &generation_observer::on_after_entity_retry, attempt);
@@ -1284,16 +1696,25 @@ class eg
     // .split("seed"); the component's own engine is core::rng{its seed}.
     [[nodiscard]] static entity generate_impl(
         std::span<const component_ref> components, std::uint64_t entity_seed, // NOLINT(bugprone-easily-swappable-parameters)
-        std::size_t max_retries, const observer_list& observers)
+        std::size_t max_retries, const observer_list& observers, const input_map& inputs)
     {
         entity generated_entity;
         generation_context ctx;
+        ctx._inputs = &inputs;
         generated_entity._seed = entity_seed;
         const core::rng root{entity_seed};
 
         for (const auto& ref : components)
         {
             const auto stream = root.split(core::to_utf8(ref.key));
+
+            // A component whose dependency did not run does not run either.
+            if (!std::ranges::all_of(ref.depends, [&ctx](const auto& dep) { return ctx.has(dep); }))
+            {
+                notify_all(observers,
+                    &generation_observer::on_skip, ref.key);
+                continue;
+            }
 
             // Roll against the effective weight.
             if (ref.effective_weight < 1.0)
@@ -1354,11 +1775,13 @@ class eg
 
             ctx._values[ref.key] = value;
             generated_entity._entries.push_back(
-                {.key = ref.key, .value = std::move(value),
+                {.key = ref.key, .label = ref.comp.get().label(),
+                 .value = std::move(value),
                  .display = std::move(display),
                  .seed = component_seed, .json = std::move(json)});
         }
 
+        generated_entity._data = replay_data(components, ctx, inputs);
         return generated_entity;
     }
 
@@ -1380,10 +1803,10 @@ class eg
             const auto it = _groups.find(*request.group);
             if (it == _groups.end())
                 throw std::out_of_range("group not found");
-            return filter_components(it->second);
+            return with_dependencies(filter_components(it->second));
         }
-        return request.component_keys ? filter_components(*request.component_keys)
-                                      : all_component_refs();
+        return with_dependencies(request.component_keys ? filter_components(*request.component_keys)
+                                                        : all_component_refs());
     }
 
     [[nodiscard]] std::vector<entity> generate_batch_seeded(
@@ -1393,7 +1816,7 @@ class eg
         std::vector<entity> entities;
         entities.reserve(request.count);
         for (const auto entity_seed : batch_seeds(request.count, call_seed))
-            entities.push_back(generate_seeded(refs, entity_seed, request.validator));
+            entities.push_back(generate_seeded(refs, entity_seed, request));
         return entities;
     }
 
@@ -1406,7 +1829,7 @@ class eg
         for (const auto entity_seed : batch_seeds(request.count, call_seed))
         {
             futures.push_back(std::async(async_policy, [this, refs, &request, entity_seed] {
-                return generate_seeded(refs, entity_seed, request.validator);
+                return generate_seeded(refs, entity_seed, request);
             }));
         }
 
@@ -1424,8 +1847,7 @@ class eg
         refs.reserve(_components.size());
         std::ranges::transform(_components, std::back_inserter(refs),
             [this](const auto& entry) -> component_ref {
-                return {entry.key, std::cref(*entry.comp),
-                        effective_weight(entry.key, *entry.comp)};
+                return make_ref(entry);
             });
         return refs;
     }
@@ -1442,12 +1864,132 @@ class eg
                 return std::ranges::contains(component_keys, entry.key);
             })
             | std::views::transform([this](const auto& entry) -> component_ref {
-                return {entry.key, std::cref(*entry.comp),
-                        effective_weight(entry.key, *entry.comp)};
+                return make_ref(entry);
             });
         std::ranges::copy(matching, std::back_inserter(filtered));
 
         return filtered;
+    }
+
+    [[nodiscard]] component_ref make_ref(const component_entry& entry) const
+    {
+        return {entry.key, std::cref(*entry.comp), effective_weight(entry.key, *entry.comp),
+                entry.comp->depends_on()};
+    }
+
+    // Adds the dependencies of the selected components (transitively) and
+    // orders the set so every component comes after its dependencies, keeping
+    // registration order otherwise. A set without dependencies is returned
+    // as it is.
+    [[nodiscard]] std::vector<component_ref> with_dependencies(std::vector<component_ref> selected) const
+    {
+        if (std::ranges::all_of(selected, [](const auto& r) { return r.depends.empty(); }))
+            return selected;
+
+        std::set<std::wstring> wanted;
+        std::vector<std::wstring> pending;
+        for (const auto& r : selected)
+        {
+            if (wanted.insert(r.key).second) pending.push_back(r.key);
+        }
+        for (std::size_t i = 0; i < pending.size(); ++i)
+        {
+            const auto it = std::ranges::find(_components, pending[i], &component_entry::key);
+            for (const auto& dep : it->comp->depends_on())
+            {
+                if (!has(dep))
+                    throw std::invalid_argument("component '" + core::to_utf8(pending[i]) +
+                                                "' depends on '" + core::to_utf8(dep) +
+                                                "', which is not registered");
+                if (wanted.insert(dep).second) pending.push_back(dep);
+            }
+        }
+
+        std::vector<component_ref> remaining;
+        for (const auto& entry : _components)
+        {
+            if (wanted.contains(entry.key)) remaining.push_back(make_ref(entry));
+        }
+        std::vector<component_ref> ordered;
+        std::set<std::wstring> emitted;
+        while (!remaining.empty())
+        {
+            const auto next = std::ranges::find_if(remaining, [&emitted](const auto& r) {
+                return std::ranges::all_of(r.depends, [&emitted](const auto& d) { return emitted.contains(d); });
+            });
+            if (next == remaining.end())
+            {
+                std::string names;
+                for (const auto& r : remaining) names += (names.empty() ? "'" : ", '") + core::to_utf8(r.key) + "'";
+                throw std::logic_error("components depend on each other in a cycle: " + names);
+            }
+            emitted.insert(next->key);
+            ordered.push_back(std::move(*next));
+            remaining.erase(next);
+        }
+        return ordered;
+    }
+
+    // Hash of the request's inputs and of the data of the components that ran.
+    // Nothing to hash gives 0.
+    [[nodiscard]] static std::uint64_t replay_data(std::span<const component_ref> components,
+                                                   const generation_context& ctx,
+                                                   const input_map& inputs)
+    {
+        std::string bytes;
+        const auto put_u64 = [&bytes](std::uint64_t n) {
+            for (int shift = 0; shift < 64; shift += 8) bytes.push_back(static_cast<char>((n >> shift) & 0xFFU));
+        };
+        for (const auto& [name, value] : inputs)
+        {
+            bytes += 'i';
+            put_u64(name.size());
+            bytes += name;
+            bytes += static_cast<char>(value.index());
+            std::visit(
+                [&](const auto& v) {
+                    using V = std::decay_t<decltype(v)>;
+                    if constexpr (std::is_same_v<V, bool>) bytes += v ? '\1' : '\0';
+                    else if constexpr (std::is_same_v<V, std::int64_t>) put_u64(static_cast<std::uint64_t>(v));
+                    else if constexpr (std::is_same_v<V, double>) put_u64(std::bit_cast<std::uint64_t>(v));
+                    else
+                    {
+                        put_u64(v.size());
+                        bytes += v;
+                    }
+                },
+                value);
+        }
+        for (const auto& ref : components)
+        {
+            const auto hash = ref.comp.get().data_hash();
+            if (hash == 0 || !ctx.has(ref.key)) continue;
+            const auto key = core::to_utf8(ref.key);
+            bytes += 'c';
+            put_u64(key.size());
+            bytes += key;
+            put_u64(hash);
+        }
+        return bytes.empty() ? 0 : core::fnv1a64(bytes);
+    }
+
+    // Rejects keys the JSON could not hold: empty path segments, or a key
+    // that is also the parent of another.
+    void check_key(const std::wstring& key) const
+    {
+        const auto path = core::to_utf8(key);
+        const auto bad = [&path](const std::string& why) {
+            return std::invalid_argument("component key '" + path + "' " + why);
+        };
+        if (!path.empty() && (path.front() == '.' || path.back() == '.' || path.find("..") != std::string::npos))
+            throw bad("has an empty path segment");
+        for (const auto& other : _components)
+        {
+            if (other.key == key) continue;
+            const auto o = core::to_utf8(other.key);
+            if (o.starts_with(path + ".") || path.starts_with(o + "."))
+                throw bad("collides with '" + o + "' (one is the parent of the other)");
+        }
     }
 
     // Resolve the effective weight for a component: override wins, then

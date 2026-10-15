@@ -4370,3 +4370,374 @@ TEST_CASE("zero batch count performs no generation or validation", "[request][ba
     REQUIRE(calls == 0);
     REQUIRE(obs->events.empty());
 }
+
+// ===========================================================================
+// v4: inputs, richer JSON, labels and paths, dependencies, field(), data hash
+// ===========================================================================
+
+namespace
+{
+using dasmig::field;
+using dasmig::generation_context;
+
+// A component that exercises every v4 hook of the interface.
+class hooked_component : public dasmig::component
+{
+  public:
+    hooked_component(std::wstring key, std::vector<std::wstring> deps, std::uint64_t hash)
+        : _key{std::move(key)}, _deps{std::move(deps)}, _hash{hash} {}
+
+    [[nodiscard]] std::wstring key() const override { return _key; }
+    [[nodiscard]] std::wstring label() const override { return L"Hooked " + _key; }
+    [[nodiscard]] std::vector<std::wstring> depends_on() const override { return _deps; }
+    [[nodiscard]] std::uint64_t data_hash() const override { return _hash; }
+    [[nodiscard]] std::any generate(const generation_context& ctx) const override
+    {
+        return dasmig::core::uniform_int(ctx.random(), 0, 1000);
+    }
+    [[nodiscard]] std::wstring to_string(const std::any& value) const override
+    {
+        return default_to_string(value);
+    }
+    [[nodiscard]] dasmig::json_value to_json(const std::any& value) const override
+    {
+        const int n = std::any_cast<int>(value);
+        return dasmig::json_value::object{{"n", n}, {"list", dasmig::json_value::array{n, n + 1}}, {"ok", true}};
+    }
+
+  private:
+    std::wstring _key;
+    std::vector<std::wstring> _deps;
+    std::uint64_t _hash;
+};
+
+[[nodiscard]] std::vector<std::wstring> keys_of(const dasmig::entity& e) { return e.keys(); }
+} // namespace
+
+TEST_CASE("json_value holds arrays and objects", "[json][v4]")
+{
+    dasmig::core::json_writer w;
+    dasmig::json_value::object obj{{"a", 1},
+                                   {"b", dasmig::json_value::array{true, nullptr, "x", 2.5}},
+                                   {"c", dasmig::json_value::object{{"d", std::int64_t{-3}}}},
+                                   {"nan", std::numeric_limits<double>::quiet_NaN()}};
+    dasmig::json_value{std::move(obj)}.write(w);
+    REQUIRE(w.str() == R"({"a":1,"b":[true,null,"x",2.5],"c":{"d":-3},"nan":null})");
+}
+
+TEST_CASE("a component can return an object with arrays", "[json][v4]")
+{
+    dasmig::eg gen;
+    gen.add(std::make_unique<hooked_component>(L"h", std::vector<std::wstring>{}, 0));
+    const auto e = gen.generate({}, 5);
+    const auto n = e.get<int>(L"h");
+    REQUIRE(e.to_json() == R"({"components":{"h":{"n":)" + std::to_string(n) + R"(,"list":[)" + std::to_string(n) +
+                               "," + std::to_string(n + 1) + R"(],"ok":true}},"signature":{"seed":"0000000000000005","data":"0000000000000000"}})");
+}
+
+TEST_CASE("dotted keys are written as nested objects", "[json][path][v4]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"identity.name", [](const generation_context&) { return std::wstring{L"Ana"}; }));
+    gen.add(field(L"top", [](const generation_context&) { return 1; }));
+    gen.add(field(L"identity.age", [](const generation_context&) { return 30; }));
+    gen.add(field(L"place.city.name", [](const generation_context&) { return std::wstring{L"Rio"}; }));
+    const auto e = gen.generate({}, 1);
+    REQUIRE(e.to_json() ==
+            R"({"components":{"identity":{"name":"Ana","age":30},"top":1,"place":{"city":{"name":"Rio"}}},)"
+            R"("signature":{"seed":"0000000000000001","data":"0000000000000000"}})");
+    // Lookups still use the full key.
+    REQUIRE(e.get<int>(L"identity.age") == 30);
+}
+
+TEST_CASE("keys that cannot be written as JSON are rejected", "[registration][path][v4]")
+{
+    const auto make = [](const wchar_t* key) { return field(key, [](const generation_context&) { return 1; }); };
+    dasmig::eg gen;
+    REQUIRE_THROWS_AS(gen.add(make(L"a..b")), std::invalid_argument);
+    REQUIRE_THROWS_AS(gen.add(make(L".a")), std::invalid_argument);
+    REQUIRE_THROWS_AS(gen.add(make(L"a.")), std::invalid_argument);
+    REQUIRE(gen.size() == 0);
+
+    gen.add(make(L"a.b"));
+    REQUIRE_THROWS_AS(gen.add(make(L"a")), std::invalid_argument);
+    REQUIRE_THROWS_AS(gen.add(make(L"a.b.c")), std::invalid_argument);
+    gen.add(make(L"a.c"));                // a sibling is fine
+    gen.add(make(L"ab"));                 // a prefix that is not a path prefix is fine
+    gen.add(make(L"a.b"));                // replacing a component is fine
+    REQUIRE(gen.size() == 3);
+    REQUIRE_THROWS_WITH(gen.add(make(L"a")), Catch::Matchers::ContainsSubstring("collides with 'a.b'"));
+}
+
+TEST_CASE("labels show in to_string, keys in JSON", "[label][v4]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"age", [](const generation_context&) { return 41; }).label(L"Age (years)"));
+    gen.add(field(L"plain", [](const generation_context&) { return 2; }));
+    const auto e = gen.generate({}, 1);
+    REQUIRE(e.to_string() == L"Age (years): 41  plain: 2");
+    REQUIRE(e.to_json().find(R"("age":41)") != std::string::npos);
+    REQUIRE(e.to_json().find("Age (years)") == std::string::npos);
+}
+
+TEST_CASE("inputs reach the components and are typed", "[inputs][v4]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"country", [](const generation_context& ctx) {
+        return ctx.input_or<std::string>("country", "none");
+    }));
+    gen.add(field(L"year", [](const generation_context& ctx) { return ctx.input<std::int64_t>("year"); }));
+    gen.add(field(L"has", [](const generation_context& ctx) { return ctx.has_input("country"); }));
+
+    const dasmig::entity_request request{.inputs = {{"country", std::string{"BR"}}, {"year", std::int64_t{2026}}}};
+    const auto e = gen.generate(request, 7);
+    REQUIRE(e.get<std::string>(L"country") == "BR");
+    REQUIRE(e.get<std::int64_t>(L"year") == 2026);
+    REQUIRE(e.get<bool>(L"has"));
+
+    // A missing or mistyped input names itself.
+    REQUIRE_THROWS_WITH(gen.generate({}, 7), Catch::Matchers::ContainsSubstring("input 'year' was not supplied"));
+    const dasmig::entity_request wrong{.inputs = {{"year", std::string{"x"}}}};
+    REQUIRE_THROWS_WITH(gen.generate(wrong, 7), Catch::Matchers::ContainsSubstring("input 'year' has another type"));
+}
+
+TEST_CASE("inputs are part of the replay signature and do not move the draws", "[inputs][seed][v4]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"n", [](const generation_context& ctx) { return dasmig::core::uniform_int(ctx.random(), 0, 1'000'000); }));
+
+    const auto plain = gen.generate({}, 11);
+    REQUIRE(plain.signature().data == 0);
+
+    const dasmig::entity_request a{.inputs = {{"country", std::string{"BR"}}}};
+    const dasmig::entity_request b{.inputs = {{"country", std::string{"JP"}}}};
+    const dasmig::entity_request c{.inputs = {{"country", std::string{"BR"}}, {"flag", true}, {"r", 1.5}}};
+    const auto ea = gen.generate(a, 11);
+    REQUIRE(ea.signature().seed == 11);
+    REQUIRE(ea.signature().data != 0);
+    REQUIRE(ea.signature().data == gen.generate(a, 11).signature().data);
+    REQUIRE(ea.signature().data != gen.generate(b, 11).signature().data);
+    REQUIRE(ea.signature().data != gen.generate(c, 11).signature().data);
+    // The draws depend on the seed and the key only.
+    REQUIRE(ea.get<int>(L"n") == plain.get<int>(L"n"));
+    // Every kind of input changes the hash.
+    const dasmig::entity_request d{.inputs = {{"country", std::string{"BR"}}, {"flag", false}, {"r", 1.5}}};
+    const dasmig::entity_request e2{.inputs = {{"country", std::string{"BR"}}, {"flag", true}, {"r", 2.5}}};
+    REQUIRE(gen.generate(c, 11).signature().data != gen.generate(d, 11).signature().data);
+    REQUIRE(gen.generate(c, 11).signature().data != gen.generate(e2, 11).signature().data);
+}
+
+TEST_CASE("batches and groups carry the inputs", "[inputs][batch][v4]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"c", [](const generation_context& ctx) { return ctx.input<std::string>("country"); }));
+    gen.add_group(L"g", {L"c"});
+    const dasmig::entity_request request{.count = 4, .inputs = {{"country", std::string{"PT"}}}};
+    const auto batch = gen.generate_batch(request, 3);
+    const auto async = gen.generate_batch_async(request, 3);
+    REQUIRE(batch.size() == 4);
+    for (std::size_t i = 0; i < batch.size(); ++i)
+    {
+        REQUIRE(batch[i].get<std::string>(L"c") == "PT");
+        REQUIRE(batch[i].to_json() == async[i].to_json());
+    }
+    const dasmig::entity_request grouped{.group = L"g", .inputs = {{"country", std::string{"AR"}}}};
+    REQUIRE(gen.generate_group(grouped, 1).get<std::string>(L"c") == "AR");
+}
+
+TEST_CASE("a request pulls in the dependencies of what it selects", "[depends][v4]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"a", [](const generation_context&) { return 1; }));
+    gen.add(field(L"b", [](const generation_context& ctx) { return ctx.get<int>(L"a") + 1; }).depends_on({L"a"}));
+    gen.add(field(L"c", [](const generation_context& ctx) { return ctx.get<int>(L"b") + 1; }).depends_on({L"b"}));
+    gen.add(field(L"unrelated", [](const generation_context&) { return 0; }));
+
+    const auto e = gen.generate({.component_keys = std::vector<std::wstring>{L"c"}}, 1);
+    REQUIRE(keys_of(e) == std::vector<std::wstring>{L"a", L"b", L"c"});
+    REQUIRE(e.get<int>(L"c") == 3);
+
+    gen.add_group(L"g", {L"b"});
+    REQUIRE(keys_of(gen.generate({.group = L"g"}, 1)) == std::vector<std::wstring>{L"a", L"b"});
+}
+
+TEST_CASE("dependencies are ordered before their dependents", "[depends][v4]")
+{
+    dasmig::eg ordered;
+    ordered.add(field(L"a", [](const generation_context& ctx) { return dasmig::core::uniform_int(ctx.random(), 0, 999); }));
+    ordered.add(field(L"b", [](const generation_context& ctx) { return ctx.get<int>(L"a") + 1; }).depends_on({L"a"}));
+
+    dasmig::eg reversed; // dependent registered first
+    reversed.add(field(L"b", [](const generation_context& ctx) { return ctx.get<int>(L"a") + 1; }).depends_on({L"a"}));
+    reversed.add(field(L"a", [](const generation_context& ctx) { return dasmig::core::uniform_int(ctx.random(), 0, 999); }));
+
+    const auto e1 = ordered.generate({}, 9);
+    const auto e2 = reversed.generate({}, 9);
+    REQUIRE(keys_of(e2) == std::vector<std::wstring>{L"a", L"b"});
+    // Same draws: streams come from the seed and the key, not the position.
+    REQUIRE(e2.get<int>(L"a") == e1.get<int>(L"a"));
+    REQUIRE(e2.get<int>(L"b") == e1.get<int>(L"b"));
+}
+
+TEST_CASE("components without dependencies keep registration order", "[depends][v4]")
+{
+    dasmig::eg gen;
+    for (const wchar_t* k : {L"z", L"y", L"x", L"w"}) gen.add(field(k, [](const generation_context&) { return 0; }));
+    gen.add(field(L"v", [](const generation_context&) { return 0; }).depends_on({L"w"}));
+    REQUIRE(keys_of(gen.generate({}, 1)) == std::vector<std::wstring>{L"z", L"y", L"x", L"w", L"v"});
+    REQUIRE(keys_of(gen.generate({.component_keys = std::vector<std::wstring>{L"v", L"y"}}, 1)) ==
+            std::vector<std::wstring>{L"y", L"w", L"v"});
+}
+
+TEST_CASE("a cycle or a missing dependency is an error that names the keys", "[depends][v4]")
+{
+    dasmig::eg cycle;
+    cycle.add(field(L"a", [](const generation_context&) { return 0; }).depends_on({L"b"}));
+    cycle.add(field(L"b", [](const generation_context&) { return 0; }).depends_on({L"a"}));
+    REQUIRE_THROWS_AS(cycle.generate({}, 1), std::logic_error);
+    REQUIRE_THROWS_WITH(cycle.generate({}, 1), Catch::Matchers::ContainsSubstring("'a', 'b'"));
+
+    dasmig::eg missing;
+    missing.add(field(L"a", [](const generation_context&) { return 0; }).depends_on({L"nope"}));
+    REQUIRE_THROWS_AS(missing.generate({}, 1), std::invalid_argument);
+    REQUIRE_THROWS_WITH(missing.generate({}, 1), Catch::Matchers::ContainsSubstring("depends on 'nope'"));
+}
+
+TEST_CASE("a component whose dependency was skipped is skipped too", "[depends][skip][v4]")
+{
+    dasmig::eg gen;
+    const auto obs = std::make_shared<test_observer>();
+    gen.add_observer(obs);
+    gen.add(field(L"root", [](const generation_context&) { return 1; }).weight(0.0));
+    gen.add(field(L"child", [](const generation_context& ctx) { return ctx.get<int>(L"root"); }).depends_on({L"root"}));
+    gen.add(field(L"grandchild", [](const generation_context& ctx) { return ctx.get<int>(L"child"); }).depends_on({L"child"}));
+    gen.add(field(L"free", [](const generation_context&) { return 5; }));
+
+    const auto e = gen.generate({}, 1);
+    REQUIRE(keys_of(e) == std::vector<std::wstring>{L"free"});
+    REQUIRE(std::ranges::count(obs->events, L"skip:root") == 1);
+    REQUIRE(std::ranges::count(obs->events, L"skip:child") == 1);
+    REQUIRE(std::ranges::count(obs->events, L"skip:grandchild") == 1);
+
+    // should_generate() decides the same way.
+    dasmig::eg gen2;
+    gen2.add(field(L"root", [](const generation_context&) { return 1; }).when([](const generation_context&) { return false; }));
+    gen2.add(field(L"child", [](const generation_context& ctx) { return ctx.get<int>(L"root"); }).depends_on({L"root"}));
+    REQUIRE(gen2.generate({}, 1).empty());
+}
+
+TEST_CASE("field() sets label, format, json, validate and weight", "[field][v4]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"temp", [](const generation_context& ctx) { return dasmig::core::uniform_int(ctx.random(), 1, 100); })
+                .label(L"Temperature")
+                .format([](const int& v) { return std::to_wstring(v) + L" C"; })
+                .json([](const int& v) { return dasmig::json_value::object{{"celsius", v}}; })
+                .validate([](const int& v) { return v % 2 == 0; }));
+    gen.add(field(L"rare", [](const generation_context&) { return 1; }).weight(0.0));
+
+    for (std::uint64_t seed = 0; seed < 50; ++seed)
+    {
+        const auto e = gen.generate({}, seed);
+        REQUIRE(e.get<int>(L"temp") % 2 == 0);
+        REQUIRE_FALSE(e.has(L"rare"));
+        REQUIRE(e.to_string().starts_with(L"Temperature: "));
+        REQUIRE(e.to_string().ends_with(L" C"));
+        REQUIRE(e.to_json().find(R"("temp":{"celsius":)") != std::string::npos);
+    }
+}
+
+TEST_CASE("field() with when() decides from the context", "[field][v4]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"adult", [](const generation_context& ctx) { return ctx.input<bool>("adult"); }));
+    gen.add(field(L"job", [](const generation_context&) { return std::wstring{L"clerk"}; })
+                .depends_on({L"adult"})
+                .when([](const generation_context& ctx) { return ctx.get<bool>(L"adult"); }));
+    REQUIRE(gen.generate({.inputs = {{"adult", true}}}, 1).has(L"job"));
+    REQUIRE_FALSE(gen.generate({.inputs = {{"adult", false}}}, 1).has(L"job"));
+}
+
+TEST_CASE("component data hashes enter the signature only when the component ran", "[signature][v4]")
+{
+    const auto make = [](std::uint64_t hash, double weight = 1.0) {
+        dasmig::eg gen;
+        gen.add(std::make_unique<hooked_component>(L"h", std::vector<std::wstring>{}, hash), weight);
+        gen.add(field(L"other", [](const generation_context&) { return 1; }));
+        return gen;
+    };
+    const auto none = make(0).generate({}, 1);
+    const auto one = make(111).generate({}, 1);
+    const auto two = make(222).generate({}, 1);
+    REQUIRE(none.signature().data == 0);
+    REQUIRE(one.signature().data != 0);
+    REQUIRE(one.signature().data != two.signature().data);
+    REQUIRE(one.signature().data == make(111).generate({}, 1).signature().data);
+    // Skipped: its data was not used.
+    REQUIRE(make(111, 0.0).generate({}, 1).signature().data == 0);
+
+    // field().data_hash() does the same.
+    dasmig::eg gen;
+    gen.add(field(L"f", [](const generation_context&) { return 1; }).data_hash(5));
+    REQUIRE(gen.generate({}, 1).signature().data != 0);
+    REQUIRE(gen.generate({}, 1).to_json().find(R"("data":"0000000000000000")") == std::string::npos);
+}
+
+TEST_CASE("try_get, get_or and a missing get name the key", "[context][v4]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"first", [](const generation_context& ctx) {
+        REQUIRE_FALSE(ctx.try_get<int>(L"later").has_value());
+        REQUIRE(ctx.get_or<int>(L"later", 7) == 7);
+        REQUIRE_THROWS_AS(ctx.get<int>(L"later"), std::out_of_range);
+        REQUIRE_THROWS_WITH(ctx.get<int>(L"later"), Catch::Matchers::ContainsSubstring("component 'later' has not been generated"));
+        return 1;
+    }));
+    gen.add(field(L"later", [](const generation_context& ctx) {
+        REQUIRE(ctx.try_get<int>(L"first") == 1);
+        REQUIRE(ctx.get_or<int>(L"first", 7) == 1);
+        REQUIRE_THROWS_AS(ctx.try_get<std::string>(L"first"), std::bad_any_cast);
+        return 2;
+    }));
+    REQUIRE(gen.generate({}, 1).size() == 2);
+}
+
+TEST_CASE("v4 known answers: dependencies, paths, inputs and data hashes", "[kat][v4]")
+{
+    dasmig::eg gen;
+    // Registered out of order on purpose: person.job depends on person.age.
+    gen.add(field(L"person.job", [](const generation_context& ctx) {
+                return std::wstring{ctx.get<int>(L"person.age") < 65 ? L"clerk" : L"retired"};
+            })
+                .depends_on({L"person.age"})
+                .data_hash(0x1234));
+    gen.add(field(L"person.country", [](const generation_context& ctx) { return ctx.input<std::string>("country"); }));
+    gen.add(field(L"person.age", [](const generation_context& ctx) { return dasmig::core::uniform_int(ctx.random(), 18, 90); }));
+    const dasmig::entity_request request{.inputs = {{"country", std::string{"BR"}}}};
+
+    // The signature's data is FNV-1a over: 'i', 7, "country", 3 (string), 2, "BR",
+    // then 'c', 10, "person.job", 0x1234 (lengths and the hash as 8 bytes, little-endian).
+    // Recomputed outside C++ when the test was written.
+    REQUIRE(gen.generate(request, 42).to_json() ==
+            R"({"components":{"person":{"country":"BR","age":79,"job":"retired"}},)"
+            R"("signature":{"seed":"000000000000002a","data":"ca55f8fcf19169bb"}})");
+    REQUIRE(gen.generate(request, 43).to_json() ==
+            R"({"components":{"person":{"country":"BR","age":46,"job":"clerk"}},)"
+            R"("signature":{"seed":"000000000000002b","data":"ca55f8fcf19169bb"}})");
+}
+
+TEST_CASE("default conversions cover std::string and the integer types", "[to_string][json][v4]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"s", [](const generation_context&) { return std::string{"Jo\xC3\xA3o"}; }));
+    gen.add(field(L"ll", [](const generation_context&) { return -9'000'000'000LL; }));
+    gen.add(field(L"u", [](const generation_context&) { return 7U; }));
+    gen.add(field(L"ul", [](const generation_context&) { return 8UL; }));
+    gen.add(field(L"ull", [](const generation_context&) { return 9'000'000'000ULL; }));
+    gen.add(field(L"big", [](const generation_context&) { return 18'446'744'073'709'551'615ULL; }));
+    const auto e = gen.generate({}, 1);
+    REQUIRE(e.to_string() == L"s: Jo\u00e3o  ll: -9000000000  u: 7  ul: 8  ull: 9000000000  big: 18446744073709551615");
+    REQUIRE(e.to_json().starts_with(
+        "{\"components\":{\"s\":\"Jo\xC3\xA3o\",\"ll\":-9000000000,\"u\":7,\"ul\":8,\"ull\":9000000000,"
+        "\"big\":\"18446744073709551615\"}"));
+}
