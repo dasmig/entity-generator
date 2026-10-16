@@ -143,6 +143,9 @@ make test
 # Targeted API, replay, selection, and validation tests (after building)
 ./build/test_runner "[request],[seed],[batch],[group],[validation],[kat]"
 
+# Benchmarks (results in build/bench.tsv)
+make bench
+
 # Code coverage
 make coverage
 

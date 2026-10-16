@@ -11,10 +11,13 @@ EXAMPLE_BIN := $(BUILD)/example
 TEST_SRC := tests/tests.cpp tests/catch_amalgamated.cpp
 TEST_BIN := $(BUILD)/test_runner
 
+BENCH_SRC   := bench/bench.cpp
+BENCH_FLAGS := -O2 -DNDEBUG
+
 COV_FLAGS := -fprofile-instr-generate -fcoverage-mapping
 COV_DIR   := coverage
 
-.PHONY: all clean lint test coverage docs
+.PHONY: all clean lint test bench coverage docs
 
 all: $(EXAMPLE_BIN)
 
@@ -26,6 +29,15 @@ $(TEST_BIN): $(TEST_SRC) $(HEADERS) | $(BUILD)
 
 test: $(TEST_BIN)
 	./$(TEST_BIN)
+
+# Benchmarks (bench/): an optimized build run on each tier, and again with
+# the lite tier compiled in where the library has data. Results in
+# build/bench.tsv.
+bench: $(BENCH_SRC) bench/bench.hpp $(HEADERS) | $(BUILD)
+	rm -f $(BUILD)/bench.tsv
+	$(CXX) $(CXXFLAGS) $(BENCH_FLAGS) -o $(BUILD)/bench $(BENCH_SRC)
+	./$(BUILD)/bench --tier lite --out $(BUILD)/bench.tsv
+	./$(BUILD)/bench --tier full --out $(BUILD)/bench.tsv
 
 coverage: $(TEST_SRC) $(HEADERS) | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COV_FLAGS) -o $(BUILD)/test_cov $(TEST_SRC)
