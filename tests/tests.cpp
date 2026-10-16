@@ -3,6 +3,7 @@
 #include "../dasmig/ext/stats_observer.hpp"
 #include <atomic>
 #include <limits>
+#include <numeric>
 #include <set>
 #include <sstream>
 
@@ -4713,6 +4714,19 @@ TEST_CASE("try_get, get_or and a missing get name the key", "[context][v4]")
         return 2;
     }));
     REQUIRE(gen.generate({}, 1).size() == 2);
+}
+
+TEST_CASE("get<const T&> reads an earlier value without a copy", "[context][v4]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"list", [](const generation_context&) { return std::vector<int>(1000, 7); }));
+    gen.add(field(L"sum", [](const generation_context& ctx) {
+                const auto& list = ctx.get<const std::vector<int>&>(L"list");
+                REQUIRE(&list == &ctx.get<const std::vector<int>&>(L"list"));
+                return std::accumulate(list.begin(), list.end(), 0);
+            })
+                .depends_on({L"list"}));
+    REQUIRE(gen.generate({}, 1).get<int>(L"sum") == 7000);
 }
 
 TEST_CASE("v4 known answers: dependencies, paths, inputs and data hashes", "[kat][v4]")
