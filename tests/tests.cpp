@@ -4060,7 +4060,7 @@ TEST_CASE("known answers for fixed seeds", "[kat]")
 
     std::uint64_t h = 0xcbf29ce484222325ULL;
     for (const auto& e : g.generate_batch({.count = 10000}, 7)) h = fnv1a(e.to_json(), h);
-    REQUIRE(h == 0xff5e8a58727602b3ULL);
+    REQUIRE(h == 0x6ff4b2ae28ef27aaULL); // item seeds since 4.1.0 (core::item_seed)
 }
 
 // ---------------------------------------------------------------------------
@@ -4767,4 +4767,75 @@ TEST_CASE("default conversions cover std::string and the integer types", "[to_st
     REQUIRE(e.to_json().starts_with(
         "{\"components\":{\"s\":\"Jo\xC3\xA3o\",\"ll\":-9000000000,\"u\":7,\"ul\":8,\"ull\":9000000000,"
         "\"big\":\"18446744073709551615\"}"));
+}
+
+// ---------------------------------------------------------------------------
+// Batch generation with core::batch_options
+// ---------------------------------------------------------------------------
+
+TEST_CASE("batch options: items equal the single calls for any thread count", "[batch][options]")
+{
+    dasmig::eg g;
+    add_kat_components(g);
+    const auto batch = g.generate_batch({}, {.count = 200, .threads = 1}, 77);
+    REQUIRE(batch.size() == 200);
+    for (std::uint64_t i = 0; i < batch.size(); ++i)
+    {
+        REQUIRE(batch[i].to_json() == g.generate({}, dasmig::core::item_seed(77, i)).to_json());
+    }
+
+    const auto tail = g.generate_batch({}, {.count = 100, .first = 100, .threads = 4}, 77);
+    REQUIRE(tail.size() == 100);
+    for (std::size_t i = 0; i < tail.size(); ++i)
+    {
+        REQUIRE(tail[i].to_json() == batch[100 + i].to_json());
+    }
+    for (const std::size_t threads : {2U, 7U, 0U})
+    {
+        const auto other = g.generate_batch({}, {.count = 200, .threads = threads}, 77);
+        REQUIRE(other.size() == batch.size());
+        for (std::size_t i = 0; i < other.size(); ++i)
+        {
+            REQUIRE(other[i].to_json() == batch[i].to_json());
+        }
+    }
+
+    // The request's count and the options give the same entities, and the
+    // async batch too.
+    const auto by_count = g.generate_batch({.count = 50}, 77);
+    const auto async = g.generate_batch_async({.count = 50}, 77);
+    for (std::size_t i = 0; i < by_count.size(); ++i)
+    {
+        REQUIRE(by_count[i].to_json() == batch[i].to_json());
+        REQUIRE(async[i].to_json() == batch[i].to_json());
+    }
+    REQUIRE(g.generate_batch({}, {.count = 5}).size() == 5);
+}
+
+TEST_CASE("batch options: streaming gives the same entities in order", "[batch][options]")
+{
+    dasmig::eg g;
+    add_kat_components(g);
+    const auto batch = g.generate_batch({}, {.count = 300, .first = 10, .threads = 3}, 5);
+    std::uint64_t next = 10;
+    std::size_t seen = 0;
+    g.for_each_entity({}, {.count = 300, .first = 10, .threads = 3}, 5,
+                      [&](std::uint64_t index, const dasmig::entity& e)
+                      {
+                          REQUIRE(index == next);
+                          REQUIRE(e.to_json() == batch[seen].to_json());
+                          ++next;
+                          ++seen;
+                      });
+    REQUIRE(seen == batch.size());
+}
+
+TEST_CASE("batch options: known answer of 10,000 entities", "[batch][options][kat]")
+{
+    dasmig::eg g;
+    add_kat_components(g);
+    std::uint64_t h = 0xcbf29ce484222325ULL;
+    g.for_each_entity({}, {.count = 10000, .threads = 4}, 1,
+                      [&](std::uint64_t, const dasmig::entity& e) { h = fnv1a(e.to_json(), h); });
+    REQUIRE(h == 0xa172668aaf7295d7ULL);
 }

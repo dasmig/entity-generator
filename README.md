@@ -19,6 +19,8 @@
 
 - **Core** — Generate entities composed of user-defined components. Each component produces a typed random value accessible via `entity.get<T>(key)`. Register, remove, and generate with fluent chaining.
 
+- **Batch Generation**. Generate thousands of entities from one seed, on several threads with the same output for any thread count, optionally unique by a key, and stream them as JSON Lines or CSV (see the usage guide).
+
 - **Generic Components** — Ready-made templates for common patterns: `constant_component<T>`, `choice_component<T>`, `range_component<T>`, `callback_component`, and `weighted_choice_component<T>`. All accept an optional custom formatter.
 
 - **Request-First API** — `entity_request` carries component selection, group, batch count, entity validation and per-call `inputs` (a country, a reference date, ...) for each call. Generation methods accept `(request)` or `(request, seed)`; setup stays on the instance.
