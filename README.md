@@ -175,3 +175,13 @@ Tested with:
 | [biodata-generator](https://github.com/dasmig/biodata-generator) | Procedural human physical characteristics |
 | [city-generator](https://github.com/dasmig/city-generator) | Weighted city selection by population |
 | [country-generator](https://github.com/dasmig/country-generator) | Weighted country selection by population |
+
+## License
+
+This library is released under the [MIT License](https://opensource.org/licenses/MIT).
+
+```
+MIT License
+
+Copyright (c) 2020-2026 Diego Dasso Migotto
+```
