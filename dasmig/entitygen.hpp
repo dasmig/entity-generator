@@ -36,7 +36,7 @@
 /// @author Diego Dasso Migotto (diegomigotto at hotmail dot com)
 /// @see See doc/usage.md for the narrative tutorial.
 
-DASMIG_CORE_REQUIRE(1, 0);
+DASMIG_CORE_REQUIRE(1, 1);
 
 namespace dasmig
 {
@@ -1498,9 +1498,11 @@ class eg
 
     /// @brief Generate multiple entities using a seed.
     ///
-    /// Entity @c i uses the @c i-th value of `core::rng{call_seed}.split("batch")`
-    /// as its call seed, so the result equals generate_batch_async(request,
-    /// call_seed) and each entity replays with generate(request, e.seed()).
+    /// Entity @c i uses `core::item_seed(call_seed, i)` as its call seed, so
+    /// the result equals generate_batch_async(request, call_seed) and each
+    /// entity replays with generate(request, e.seed()). Since 4.1.0 this is
+    /// the same seed derivation as every other library's batch; before, entity
+    /// @c i used the @c i-th value of `core::rng{call_seed}.split("batch")`.
     /// @param request Selection, batch count and entity validation options.
     /// @param call_seed Seed for reproducible results.
     /// @return A vector of generated entities.
@@ -1511,6 +1513,81 @@ class eg
         const entity_request& request, std::uint64_t call_seed) const
     {
         return generate_batch_seeded(resolve_components(request), request, call_seed);
+    }
+
+    /// @brief Generate a batch described by core::batch_options, from a seed
+    ///        drawn from the generator's engine.
+    ///
+    /// Uses `options.count` (the request's `count` is ignored here; it stays
+    /// for generate_batch(request) until the next major version).
+    /// @param request Selection and entity validation options.
+    /// @param options Count, first index, threads and uniqueness.
+    /// @return The entities, in index order.
+    /// @throws std::invalid_argument If both selection fields are set.
+    /// @throws std::out_of_range If the requested group does not exist.
+    /// @throws std::runtime_error If component or entity validation is exhausted.
+    [[nodiscard]] std::vector<entity> generate_batch(const entity_request& request,
+                                                     const core::batch_options& options)
+    {
+        return generate_batch(request, options, _engine());
+    }
+
+    /// @brief Generate a batch described by core::batch_options, deterministically.
+    ///
+    /// Entity @c i is exactly `generate(request, core::item_seed(batch_seed,
+    /// options.first + i))`, for any `options.threads`. With more than one
+    /// thread, components, observers and the request's validator (including
+    /// captured state) must be thread-safe.
+    /// @param request Selection and entity validation options.
+    /// @param options Count, first index, threads and uniqueness (see
+    ///        core::unique_rule, made for `entity`).
+    /// @param batch_seed Seed of the whole batch.
+    /// @return The entities, in index order.
+    /// @throws std::invalid_argument If both selection fields are set.
+    /// @throws std::out_of_range If the requested group does not exist.
+    /// @throws std::runtime_error If component or entity validation is exhausted,
+    ///         or a unique batch runs out of attempts.
+    [[nodiscard]] std::vector<entity> generate_batch(const entity_request& request,
+                                                     const core::batch_options& options,
+                                                     std::uint64_t batch_seed) const
+    {
+        const auto refs = resolve_components(request);
+        return core::run_batch(options, batch_seed, [&](std::uint64_t item_seed)
+                               { return generate_seeded(refs, item_seed, request); });
+    }
+
+    /// @brief Stream a batch of entities to a sink without holding the batch.
+    ///
+    /// Generates the same entities as generate_batch(request, options,
+    /// batch_seed) and calls `sink(index, entity&)` in index order on the
+    /// calling thread; `index` includes `options.first`.
+    /// @tparam Sink Callable taking `(std::uint64_t, entity&)`; for example
+    ///         core::jsonl_writer.
+    /// @param request Selection and entity validation options.
+    /// @param options Count, first index, threads and uniqueness.
+    /// @param batch_seed Seed of the whole batch.
+    /// @param sink Receives the entities.
+    template <typename Sink>
+    void for_each_entity(const entity_request& request, const core::batch_options& options,
+                         std::uint64_t batch_seed, Sink&& sink) const
+    {
+        const auto refs = resolve_components(request);
+        core::for_each_batch(options, batch_seed,
+                             [&](std::uint64_t item_seed) { return generate_seeded(refs, item_seed, request); },
+                             std::forward<Sink>(sink));
+    }
+
+    /// @brief Stream a batch of entities with a batch seed drawn from the
+    ///        generator's engine.
+    /// @tparam Sink Callable taking `(std::uint64_t, entity&)`.
+    /// @param request Selection and entity validation options.
+    /// @param options Count, first index, threads and uniqueness.
+    /// @param sink Receives the entities.
+    template <typename Sink>
+    void for_each_entity(const entity_request& request, const core::batch_options& options,
+                         Sink&& sink)
+    {
+        for_each_entity(request, options, _engine(), std::forward<Sink>(sink));
     }
 
     /// @}
@@ -1660,13 +1737,15 @@ class eg
     static constexpr std::launch async_policy = std::launch::async;
 #endif
 
-    // The call seeds of a batch.
+    // The call seeds of a batch: item i is core::item_seed(call_seed, i).
     [[nodiscard]] static std::vector<std::uint64_t> batch_seeds(
         std::size_t count, std::uint64_t call_seed) // NOLINT(bugprone-easily-swappable-parameters)
     {
-        auto r = core::rng{call_seed}.split("batch");
         std::vector<std::uint64_t> seeds(count);
-        std::ranges::generate(seeds, [&r] { return r(); });
+        for (std::size_t i = 0; i < count; ++i)
+        {
+            seeds[i] = core::item_seed(call_seed, i);
+        }
         return seeds;
     }
 

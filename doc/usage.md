@@ -1070,6 +1070,32 @@ Version 2 moves the library onto [dasmig-core](https://github.com/dasmig/dasmig-
 - **Files:** replace `random.hpp` with `core.hpp` and the `core/` directory, kept next to `entitygen.hpp`.
 - **New:** `entity::to_json()`, `entity::signature()`, `component::to_json()` (and `dasmig::json_value`).
 
+## Batch Generation
+
+`generate_batch` takes the same `core::batch_options` as every other library, next to the older `request.count` form, which keeps working until the next major version.
+
+```cpp
+dasmig::eg gen;
+// ... add components ...
+
+// 1,000 entities from one batch seed, on four threads.
+auto entities = gen.generate_batch({}, {.count = 1000, .threads = 4}, 42);
+
+// Entity 1 replays on its own.
+auto again = gen.generate({}, dasmig::core::item_seed(42, 1));
+
+// A million entities to a file as JSON Lines, never all in memory.
+std::ofstream out{"entities.jsonl"};
+dasmig::core::jsonl_writer lines{out};
+gen.for_each_entity({}, {.count = 1'000'000, .threads = 0}, 42, lines);
+```
+
+- **Item seeds.** Entity `i` is exactly `generate(request, core::item_seed(batch_seed, first + i))`. A range can be generated directly (`first = 1000`), two batches that follow each other equal one, and the output is the same for any `threads` (0 means the hardware count). `generate_batch_async` gives the same entities.
+- **What changed in 4.1.0.** The seeded `generate_batch(request, seed)` and `generate_batch_async(request, seed)` now use `core::item_seed` too, so their entities differ from 4.0.x for the same seed. Each entity still replays with `generate(request, e.seed())`.
+- **Threads.** With more than one thread, components, observers and the request's validator (including captured state) must be thread-safe; the CI runs the batch tests under ThreadSanitizer.
+- **Uniqueness.** `.unique = core::unique_rule::by<dasmig::entity>(key)` regenerates an entity whose key already appeared in the batch.
+- **Sinks.** `core::jsonl_writer` writes one `to_json()` per line and `core::csv_writer` flattens each entity's JSON into dotted columns.
+
 ## Error Reference
 
 The library throws standard exceptions. No custom exception types are used.
