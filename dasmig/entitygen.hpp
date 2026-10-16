@@ -147,11 +147,13 @@ class generation_context
     /// @return `true` if a value for the key exists in the context.
     [[nodiscard]] bool has(const std::wstring& component_key) const
     {
-        return _values.contains(component_key);
+        return find_(component_key) != nullptr;
     }
 
     /// @brief Typed retrieval of an already-generated component value.
-    /// @tparam T The expected type of the stored value.
+    /// @tparam T The expected type of the stored value, or a const reference
+    ///         to it (`get<const T&>`) to read it without a copy; the
+    ///         reference is valid while the entity is being generated.
     /// @param component_key The component key to retrieve.
     /// @return The value cast to @p T.
     /// @throws std::out_of_range If no value for the key was generated (the
@@ -161,13 +163,13 @@ class generation_context
     template <typename T>
     [[nodiscard]] T get(const std::wstring& component_key) const
     {
-        const auto it = _values.find(component_key);
-        if (it == _values.end())
+        const auto* value = find_(component_key);
+        if (value == nullptr)
         {
             throw std::out_of_range("component '" + core::to_utf8(component_key) +
                                     "' has not been generated");
         }
-        return std::any_cast<T>(it->second);
+        return std::any_cast<T>(*value);
     }
 
     /// @brief Typed retrieval that tolerates a missing value.
@@ -178,9 +180,9 @@ class generation_context
     template <typename T>
     [[nodiscard]] std::optional<T> try_get(const std::wstring& component_key) const
     {
-        const auto it = _values.find(component_key);
-        if (it == _values.end()) return std::nullopt;
-        return std::any_cast<T>(it->second);
+        const auto* value = find_(component_key);
+        if (value == nullptr) return std::nullopt;
+        return std::any_cast<T>(*value);
     }
 
     /// @brief Typed retrieval with a fallback.
@@ -192,8 +194,8 @@ class generation_context
     template <typename T>
     [[nodiscard]] T get_or(const std::wstring& component_key, T fallback) const
     {
-        const auto it = _values.find(component_key);
-        return it == _values.end() ? std::move(fallback) : std::any_cast<T>(it->second);
+        const auto* value = find_(component_key);
+        return value == nullptr ? std::move(fallback) : std::any_cast<T>(*value);
     }
 
     /// @brief Check whether the request supplied an input.
@@ -259,8 +261,17 @@ class generation_context
     // Private constructor, this is managed by the entity generator.
     generation_context() = default;
 
-    // Already-generated component values indexed by key.
-    std::map<std::wstring, std::any> _values;
+    // The value generated for a key, or nullptr.
+    [[nodiscard]] const std::any* find_(const std::wstring& component_key) const
+    {
+        const auto it = std::ranges::find(_values, component_key,
+                                          [](const auto& v) -> const std::wstring& { return *v.first; });
+        return it == _values.end() ? nullptr : it->second;
+    }
+
+    // Already-generated component values: the key and the value, both owned
+    // by the entity being generated (its entries never reallocate).
+    std::vector<std::pair<const std::wstring*, const std::any*>> _values;
 
     // The request's inputs (owned by the request, which outlives the call).
     const input_map* _inputs{nullptr};
@@ -1709,6 +1720,8 @@ class eg
         generation_context ctx;
         ctx._inputs = &inputs;
         generated_entity._seed = entity_seed;
+        generated_entity._entries.reserve(components.size());
+        ctx._values.reserve(components.size());
         const core::rng root{entity_seed};
 
         for (const auto& ref : components)
@@ -1780,12 +1793,12 @@ class eg
             notify_all(observers,
                 &generation_observer::on_after_component, ref.key, value);
 
-            ctx._values[ref.key] = value;
-            generated_entity._entries.push_back(
-                {.key = ref.key, .label = ref.comp.get().label(),
-                 .value = std::move(value),
-                 .display = std::move(display),
-                 .seed = component_seed, .json = std::move(json)});
+            const auto& added = generated_entity._entries.emplace_back(
+                entity::entry{.key = ref.key, .label = ref.comp.get().label(),
+                              .value = std::move(value),
+                              .display = std::move(display),
+                              .seed = component_seed, .json = std::move(json)});
+            ctx._values.emplace_back(&added.key, &added.value);
         }
 
         generated_entity._data = replay_data(components, ctx, inputs);
