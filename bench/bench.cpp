@@ -82,5 +82,9 @@ int main(int argc, char** argv)
         return gen.generate({}, seed).to_json();
     });
 
+    run.batches("generate_batch", [&](std::size_t count, std::size_t threads, std::uint64_t seed) {
+        return gen.generate_batch({}, {.count = count, .threads = threads}, seed);
+    });
+
     return run.finish();
 }

@@ -17,7 +17,7 @@ BENCH_FLAGS := -O2 -DNDEBUG
 COV_FLAGS := -fprofile-instr-generate -fcoverage-mapping
 COV_DIR   := coverage
 
-.PHONY: all clean lint test bench coverage docs
+.PHONY: all clean lint test bench bench-gate coverage docs
 
 all: $(EXAMPLE_BIN)
 
@@ -38,6 +38,12 @@ bench: $(BENCH_SRC) bench/bench.hpp $(HEADERS) | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(BENCH_FLAGS) -o $(BUILD)/bench $(BENCH_SRC)
 	./$(BUILD)/bench --tier lite --out $(BUILD)/bench.tsv
 	./$(BUILD)/bench --tier full --out $(BUILD)/bench.tsv
+
+# The instruction-count gate: the benchmark in --gate mode under cachegrind,
+# compared with bench/gate_baseline.txt (scripts/gate.py). Needs Valgrind.
+bench-gate: $(BENCH_SRC) bench/bench.hpp $(HEADERS) | $(BUILD)
+	$(CXX) $(CXXFLAGS) $(BENCH_FLAGS) -o $(BUILD)/bench_gate $(BENCH_SRC)
+	$(PYTHON) scripts/gate.py $(BUILD)/bench_gate
 
 coverage: $(TEST_SRC) $(HEADERS) | $(BUILD)
 	$(CXX) $(CXXFLAGS) $(COV_FLAGS) -o $(BUILD)/test_cov $(TEST_SRC)
