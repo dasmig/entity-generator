@@ -7,13 +7,13 @@
 [![GitHub license](https://img.shields.io/badge/license-MIT-blue.svg)](https://raw.githubusercontent.com/dasmig/entity-generator/main/LICENSE.MIT)
 [![CI](https://github.com/dasmig/entity-generator/actions/workflows/ci.yml/badge.svg)](https://github.com/dasmig/entity-generator/actions/workflows/ci.yml)
 [![GitHub Releases](https://img.shields.io/github/release/dasmig/entity-generator.svg)](https://github.com/dasmig/entity-generator/releases)
-[![GitHub Issues](https://img.shields.io/github/issues/dasmig/entity-generator.svg)](https://github.com/dasmig/entity-generator/issues)
 [![C++23](https://img.shields.io/badge/standard-C%2B%2B23-blue.svg)](https://en.cppreference.com/w/cpp/23)
 [![Header-only](https://img.shields.io/badge/type-header--only-green.svg)](https://github.com/dasmig/entity-generator#integration)
-[![Platform](https://img.shields.io/badge/platform-linux%20|%20windows%20|%20macos-lightgrey.svg)](https://github.com/dasmig/entity-generator)
 [![Documentation](https://img.shields.io/badge/docs-GitHub%20Pages-blue.svg)](https://dasmig.github.io/entity-generator/)
 
 **[API Reference](https://dasmig.github.io/entity-generator/)** · **[Usage Guide](doc/usage.md)** · **[Releases](https://github.com/dasmig/entity-generator/releases)**
+
+A small framework for generating entities from your own components, with dependencies, validation and replay.
 
 ## Features
 
@@ -161,6 +161,7 @@ Tested with:
 - Clang 18+ (`-std=c++23`)
 - GCC 14+ (`-std=c++23`)
 - MSVC 19.38+ (`/std:c++latest`)
+- Emscripten 3.1.74
 
 ## Dependencies
 
@@ -174,12 +175,19 @@ Tested with:
 
 | Library | Description |
 |---------|-------------|
-| [name-generator](https://github.com/dasmig/name-generator) | Culturally appropriate full names |
-| [nickname-generator](https://github.com/dasmig/nickname-generator) | Gamer-style nicknames |
-| [birth-generator](https://github.com/dasmig/birth-generator) | Demographically plausible birthdays |
+| [address-generator](https://github.com/dasmig/address-generator) | Postal addresses with real streets by place |
 | [biodata-generator](https://github.com/dasmig/biodata-generator) | Procedural human physical characteristics |
+| [birth-generator](https://github.com/dasmig/birth-generator) | Demographically plausible birthdays |
 | [city-generator](https://github.com/dasmig/city-generator) | Weighted city selection by population |
 | [country-generator](https://github.com/dasmig/country-generator) | Weighted country selection by population |
+| [email-generator](https://github.com/dasmig/email-generator) | Email addresses in each country's style |
+| [interest-generator](https://github.com/dasmig/interest-generator) | Religion, hobbies and favourite media by country, age and sex |
+| [name-generator](https://github.com/dasmig/name-generator) | Culturally appropriate full names |
+| [nickname-generator](https://github.com/dasmig/nickname-generator) | Gamer-style nicknames |
+| [occupation-generator](https://github.com/dasmig/occupation-generator) | Employment status, education and occupation by country, age and sex |
+| [persona-generator](https://github.com/dasmig/persona-generator) | Complete characters composed from the other generators |
+| [phone-generator](https://github.com/dasmig/phone-generator) | Phone numbers valid in each country's numbering plan |
+| [trait-generator](https://github.com/dasmig/trait-generator) | Personality traits with conflicts, synergies and Big Five axes |
 
 ## License
 
