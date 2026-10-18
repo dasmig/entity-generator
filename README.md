@@ -27,6 +27,8 @@ A small framework for generating entities from your own components, with depende
 
 - **Dependencies & Fields** — A component declares `depends_on()`: a request pulls in what it needs, orders it, and skips a component whose dependency was skipped. `field(key, fn)` builds a component in one expression, with a label, formatter, JSON mapper, validator and condition.
 
+- **Recipes** — Components that draw from a list or a range are written as rows of a tab-separated file (`constant`, `choice`, `weighted`, `int`, `real`, with labels, dependencies and weights) and registered with `add_recipe(path)`, no recompiling.
+
 - **Randomness & Replay** — Explicit per-call seeds and caller-owned deterministic sequences. Every entity and component stores its seed for full replay via seed signatures; `generate(request, e.seed())` reproduces an entity with the same request and setup.
 
 - **Identical Everywhere** — A seed gives the same entity on every compiler, standard library and CPU (GCC, Clang, MSVC, Emscripten; x86-64 and ARM64), checked by known-answer tests. Each component draws from its own stream, so adding a component does not change the others.

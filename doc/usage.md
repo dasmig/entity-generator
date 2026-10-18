@@ -17,6 +17,7 @@ This guide covers every feature of the entity-generator library in detail. For a
 <li><a href="#batch-generation">Batch Generation</a></li>
 <li><a href="#component-groups">Component Groups</a></li>
 <li><a href="#thread-safety">Thread Safety</a></li>
+<li><a href="#recipes">Recipes</a></li>
 <li><a href="#component-weights">Component Weights</a></li>
 <li><a href="#entity-serialization">Entity Serialization</a></li>
 <li><a href="#structured-serialization">Structured Serialization</a></li>
@@ -388,6 +389,47 @@ for (int i = 0; i < 4; ++i)
 ```
 
 `eg` is move-constructible and move-assignable, so instances can be transferred between scopes. The `instance()` singleton is still available for single-threaded convenience.
+
+## Recipes
+
+A component that only draws from data can be written as data. A recipe is a tab-separated file with one component per row; `add_recipe(path)` or `add_recipe_from_string(text)` registers them, and they behave like components made with `field()`: dependencies, ordering, weights, replay and JSON are the same.
+
+```
+key	kind	values	label	depends_on	weight
+planet	weighted	Terra:3|Mars:1	Planet
+crew	int	2..9
+mass	real	1.5..2.5
+mood	choice	calm|tense		planet
+flag	constant	blue			0.5
+```
+
+```cpp
+dasmig::eg gen;
+gen.add_recipe("ship.tsv");
+auto e = gen.generate({}, 42);
+auto crew = e.get<std::int64_t>(L"crew");
+```
+
+| Column | | Meaning |
+|--------|---|---------|
+| `key` | required | The component key; dots make a path in the JSON |
+| `kind` | required | `constant`, `choice`, `weighted`, `int` or `real` |
+| `values` | required | What the kind draws from |
+| `label` | optional | Display name; the key by default |
+| `depends_on` | optional | Keys this component follows, separated by `;` |
+| `weight` | optional | Inclusion probability, 0 to 1; 1 by default |
+
+| Kind | `values` | Value |
+|------|----------|-------|
+| `constant` | any text | `std::wstring` |
+| `choice` | `a\|b\|c`, uniform | `std::wstring` |
+| `weighted` | `a:3\|b:1`, a value and its relative weight (split at the last colon) | `std::wstring` |
+| `int` | `lo..hi`, both included | `std::int64_t` |
+| `real` | `lo..hi`, `hi` excluded | `double` |
+
+Items are not trimmed. A row with an unknown kind, a bad range or weight, an empty value or a repeated key throws `core::tsv_error` naming the file, line and column, and nothing from the recipe is added; so does a key whose path clashes with an existing key (`std::invalid_argument`). A recipe component with the key of an existing one replaces it, so a recipe can override a default that code registered. Code fields can list recipe keys in `depends_on`, and recipe rows can list code keys.
+
+The text of each row (key, kind and values) is the component's data hash, so changing a recipe changes the replay signature of every entity that used it. Recipes cover the components that draw from a list or a range. A component that reads another's value, calls a generator or computes something stays in code.
 
 ## Component Weights
 

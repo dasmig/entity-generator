@@ -12,6 +12,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
 #include <functional>
 #include <future>
 #include <iterator>
@@ -1316,6 +1317,57 @@ class eg
         return add(std::make_unique<field_component<T>>(std::move(f)));
     }
 
+    /// @brief Register the components a recipe declares.
+    ///
+    /// A recipe is a tab-separated file with a header line and one component
+    /// per row, so a component that only draws from data is written as data
+    /// instead of code (see add_recipe_from_string() for the columns). The
+    /// components are the ones the code makes with field(): the same
+    /// dependencies, ordering, weights and replay. An invalid row throws and
+    /// adds nothing.
+    ///
+    /// @param path The recipe file.
+    /// @return `*this` for chaining.
+    /// @throws core::tsv_error If the file cannot be read or a row is invalid.
+    /// @throws std::invalid_argument As add(std::unique_ptr<component>).
+    eg& add_recipe(const std::filesystem::path& path)
+    {
+        return add_recipe_(core::tsv_document::load(path));
+    }
+
+    /// @brief Register the components a recipe in text declares.
+    ///
+    /// Columns (the header names them, in any order):
+    ///
+    /// | Column | | Meaning |
+    /// |---|---|---|
+    /// | `key` | required | The component key; dots make a path in the JSON |
+    /// | `kind` | required | `constant`, `choice`, `weighted`, `int` or `real` |
+    /// | `values` | required | What the kind draws from, below |
+    /// | `label` | optional | Display name; the key by default |
+    /// | `depends_on` | optional | Keys this component follows, separated by `;` |
+    /// | `weight` | optional | Inclusion probability, 0 to 1; 1 by default |
+    ///
+    /// The kinds: `constant` gives `values` as text; `choice` picks uniformly
+    /// from `a|b|c`; `weighted` picks from `a:3|b:1` (a value and its
+    /// relative weight, split at the last colon); `int` draws an integer from
+    /// `lo..hi` (both included); `real` draws a number from `lo..hi` (`hi`
+    /// excluded). Text kinds give strings in the JSON, `int` and `real` give
+    /// numbers. Items are not trimmed. A component with the key of an
+    /// existing one replaces it. The recipe's rows are part of the entity's
+    /// replay signature.
+    ///
+    /// @param text UTF-8 recipe text.
+    /// @param source Name used in errors.
+    /// @return `*this` for chaining.
+    /// @throws core::tsv_error If the text is malformed or a row is invalid
+    ///         (an unknown kind, a bad range or weight, a repeated key).
+    /// @throws std::invalid_argument As add(std::unique_ptr<component>).
+    eg& add_recipe_from_string(std::string_view text, std::string source = "recipe")
+    {
+        return add_recipe_(core::tsv_document::parse(text, std::move(source)));
+    }
+
     /// @brief Register a component with a weight override.
     ///
     /// The override takes precedence over the component's own weight() method.
@@ -2074,6 +2126,117 @@ class eg
 
     // Rejects keys the JSON could not hold: empty path segments, or a key
     // that is also the parent of another.
+    // Build every component of a recipe, then add them, so a bad row adds none.
+    eg& add_recipe_(const core::tsv_document& doc)
+    {
+        std::vector<std::unique_ptr<component>> built;
+        std::set<std::string> seen;
+        for (const auto& row : doc.rows())
+        {
+            const auto key = row.get<std::string>("key");
+            if (!seen.insert(key).second) throw row.error("key", "key repeated in the recipe");
+            built.push_back(recipe_component_(row, key));
+        }
+        for (const auto& comp : built) check_key(comp->key());
+        for (auto& comp : built) add(std::move(comp));
+        return *this;
+    }
+
+    static std::unique_ptr<component> recipe_component_(const core::tsv_row& row, const std::string& key)
+    {
+        const auto kind = row.get<std::string>("kind");
+        const auto values = row.get<std::string>("values");
+        const auto hash = core::fnv1a64(key + '\t' + kind + '\t' + values);
+
+        if (kind == "constant")
+        {
+            return finish_recipe_(field(core::from_utf8(key),
+                                        [text = core::from_utf8(values)](const generation_context&) { return text; }),
+                                  row, key, hash);
+        }
+        if (kind == "choice")
+        {
+            std::vector<std::wstring> choices;
+            for (const auto item : row.list("values", '|')) choices.push_back(core::from_utf8(item));
+            return finish_recipe_(field(core::from_utf8(key),
+                                        [choices](const generation_context& ctx)
+                                        { return core::pick(ctx.random(), choices); }),
+                                  row, key, hash);
+        }
+        if (kind == "weighted")
+        {
+            std::vector<std::wstring> choices;
+            std::vector<double> weights;
+            for (const auto item : row.list("values", '|'))
+            {
+                const auto colon = item.rfind(':');
+                if (colon == std::string_view::npos)
+                    throw row.error("values", "expected value:weight, got '" + std::string{item} + "'");
+                const auto weight = core::detail::parse_number<double>(item.substr(colon + 1));
+                if (!weight || !(*weight >= 0.0))
+                    throw row.error("values", "weight must be a number of 0 or more in '" + std::string{item} + "'");
+                choices.push_back(core::from_utf8(item.substr(0, colon)));
+                weights.push_back(*weight);
+            }
+            if (!std::ranges::any_of(weights, [](double w) { return w > 0.0; }))
+                throw row.error("values", "at least one weight must be positive");
+            return finish_recipe_(field(core::from_utf8(key),
+                                        [choices, dist = core::discrete{weights}](const generation_context& ctx)
+                                        { return choices[dist(ctx.random())]; }),
+                                  row, key, hash);
+        }
+        if (kind == "int" || kind == "real")
+        {
+            const std::string_view range = values;
+            const auto dots = range.find("..");
+            if (dots == std::string_view::npos)
+                throw row.error("values", "expected lo..hi, got '" + values + "'");
+            if (kind == "int")
+            {
+                const auto lo = core::detail::parse_number<std::int64_t>(range.substr(0, dots));
+                const auto hi = core::detail::parse_number<std::int64_t>(range.substr(dots + 2));
+                if (!lo || !hi || *lo > *hi)
+                    throw row.error("values", "expected whole numbers lo..hi with lo <= hi, got '" + values + "'");
+                return finish_recipe_(field(core::from_utf8(key),
+                                            [lo = *lo, hi = *hi](const generation_context& ctx)
+                                            { return core::uniform_int(ctx.random(), lo, hi); }),
+                                      row, key, hash);
+            }
+            const auto lo = core::detail::parse_number<double>(range.substr(0, dots));
+            const auto hi = core::detail::parse_number<double>(range.substr(dots + 2));
+            if (!lo || !hi || !(*lo <= *hi))
+                throw row.error("values", "expected finite numbers lo..hi with lo <= hi, got '" + values + "'");
+            return finish_recipe_(field(core::from_utf8(key),
+                                        [lo = *lo, hi = *hi](const generation_context& ctx)
+                                        {
+                                            const double v = core::uniform_real(ctx.random(), lo, hi);
+                                            return v >= hi && hi > lo ? std::nextafter(hi, lo) : v;
+                                        }),
+                                  row, key, hash);
+        }
+        throw row.error("kind", "expected constant, choice, weighted, int or real, got '" + kind + "'");
+    }
+
+    // Apply the columns every kind shares and wrap the field as a component.
+    template <typename T>
+    static std::unique_ptr<component> finish_recipe_(field_component<T> f, const core::tsv_row& row,
+                                                     const std::string& key, std::uint64_t hash)
+    {
+        const auto label = row.get_or<std::string>("label", key);
+        std::vector<std::wstring> depends;
+        if (row.has("depends_on"))
+        {
+            for (const auto item : row.list("depends_on")) depends.push_back(core::from_utf8(item));
+        }
+        const auto weight = row.get_or<double>("weight", 1.0);
+        if (!(weight >= 0.0 && weight <= 1.0)) throw row.error("weight", "must be between 0 and 1");
+        return std::make_unique<field_component<T>>(std::move(f)
+                                                        .label(core::from_utf8(label))
+                                                        .depends_on(std::move(depends))
+                                                        .weight(weight)
+                                                        .data_hash(hash));
+    }
+
     void check_key(const std::wstring& key) const
     {
         const auto path = core::to_utf8(key);

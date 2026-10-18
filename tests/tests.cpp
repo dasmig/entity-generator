@@ -2,7 +2,10 @@
 #include "../dasmig/entitygen.hpp"
 #include "../dasmig/ext/stats_observer.hpp"
 #include <atomic>
+#include <filesystem>
+#include <fstream>
 #include <limits>
+#include <map>
 #include <numeric>
 #include <set>
 #include <sstream>
@@ -4838,4 +4841,178 @@ TEST_CASE("batch options: known answer of 10,000 entities", "[batch][options][ka
     g.for_each_entity({}, {.count = 10000, .threads = 4}, 1,
                       [&](std::uint64_t, const dasmig::entity& e) { h = fnv1a(e.to_json(), h); });
     REQUIRE(h == 0xa172668aaf7295d7ULL);
+}
+// ---------------------------------------------------------------------------
+// Recipes
+// ---------------------------------------------------------------------------
+
+namespace
+{
+constexpr auto recipe_header = "key\tkind\tvalues\tlabel\tdepends_on\tweight\n";
+}
+
+TEST_CASE("recipe: each kind draws what it declares", "[recipe]")
+{
+    dasmig::eg gen;
+    gen.add_recipe_from_string(std::string{recipe_header} +
+                               "planet\tweighted\tTerra:3|Mars:1\tPlanet\t\t\n"
+                               "crew\tint\t2..9\t\t\t\n"
+                               "mass\treal\t1.5..2.5\t\t\t\n"
+                               "mood\tchoice\tcalm|tense\t\t\t\n"
+                               "flag\tconstant\tblue\t\t\t\n");
+    REQUIRE(gen.size() == 5);
+
+    std::map<std::wstring, int> planets;
+    std::set<std::wstring> moods;
+    std::set<std::int64_t> crews;
+    for (std::uint64_t seed = 0; seed < 4000; ++seed)
+    {
+        const auto e = gen.generate({}, seed);
+        ++planets[e.get<std::wstring>(L"planet")];
+        moods.insert(e.get<std::wstring>(L"mood"));
+        const auto crew = e.get<std::int64_t>(L"crew");
+        REQUIRE(crew >= 2);
+        REQUIRE(crew <= 9);
+        crews.insert(crew);
+        const auto mass = e.get<double>(L"mass");
+        REQUIRE(mass >= 1.5);
+        REQUIRE(mass < 2.5);
+        REQUIRE(e.get<std::wstring>(L"flag") == L"blue");
+    }
+    REQUIRE(moods == std::set<std::wstring>{L"calm", L"tense"});
+    REQUIRE(crews.size() == 8);
+    REQUIRE(planets.size() == 2);
+    REQUIRE(planets[L"Terra"] > 2 * planets[L"Mars"]); // 3:1
+    REQUIRE(planets[L"Terra"] < 4 * planets[L"Mars"]);
+}
+
+TEST_CASE("recipe: JSON types follow the kind and a label shows in the text", "[recipe]")
+{
+    dasmig::eg gen;
+    gen.add_recipe_from_string(std::string{recipe_header} +
+                               "ship.name\tconstant\tNova\tShip\t\t\n"
+                               "ship.crew\tint\t4..4\t\t\t\n");
+    const auto e = gen.generate({}, 1);
+    const auto json = e.to_json();
+    REQUIRE(json.find(R"("ship":{"name":"Nova","crew":4})") != std::string::npos);
+    REQUIRE(e.to_string().find(L"Ship: Nova") != std::wstring::npos);
+}
+
+TEST_CASE("recipe: the same seed replays and the recipe is in the signature", "[recipe][signature]")
+{
+    const auto make = [](std::string_view values) {
+        dasmig::eg gen;
+        gen.add_recipe_from_string(std::string{recipe_header} + "crew\tint\t" + std::string{values} + "\t\t\t\n");
+        return gen;
+    };
+    const auto a = make("2..9").generate({}, 7);
+    const auto b = make("2..9").generate({}, 7);
+    REQUIRE(a.to_json() == b.to_json());
+    REQUIRE(a.signature().data != 0);
+    REQUIRE(a.signature().data != make("2..10").generate({}, 7).signature().data);
+}
+
+TEST_CASE("recipe: depends_on orders components and weight 0 skips them", "[recipe]")
+{
+    dasmig::eg gen;
+    gen.add_recipe_from_string(std::string{recipe_header} +
+                               "late\tconstant\tz\t\tearly\t\n"
+                               "early\tconstant\ta\t\t\t\n"
+                               "gone\tconstant\tx\t\t\t0\n"
+                               "after_gone\tconstant\ty\t\tgone\t\n");
+    const auto e = gen.generate({}, 1);
+    REQUIRE(e.has(L"late"));
+    REQUIRE_FALSE(e.has(L"gone"));
+    REQUIRE_FALSE(e.has(L"after_gone")); // its dependency was skipped
+    const auto keys = e.keys();
+    REQUIRE(std::ranges::find(keys, L"early") < std::ranges::find(keys, L"late"));
+}
+
+TEST_CASE("recipe: code fields can depend on recipe components", "[recipe]")
+{
+    dasmig::eg gen;
+    gen.add_recipe_from_string(std::string{recipe_header} + "crew\tint\t3..3\t\t\t\n");
+    gen.add(field(L"rations", [](const generation_context& ctx) { return ctx.get<std::int64_t>(L"crew") * 10; })
+                .depends_on({L"crew"}));
+    REQUIRE(gen.generate({.component_keys = std::vector<std::wstring>{L"rations"}}, 1).get<std::int64_t>(L"rations") == 30);
+}
+
+TEST_CASE("recipe: a component with an existing key replaces it", "[recipe]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"flag", [](const generation_context&) { return std::wstring{L"red"}; }));
+    gen.add_recipe_from_string(std::string{recipe_header} + "flag\tconstant\tblue\t\t\t\n");
+    REQUIRE(gen.size() == 1);
+    REQUIRE(gen.generate({}, 1).get<std::wstring>(L"flag") == L"blue");
+}
+
+TEST_CASE("recipe: a bad row throws with its location and adds nothing", "[recipe]")
+{
+    const auto bad = [](const std::string& row) {
+        dasmig::eg gen;
+        gen.add(field(L"keep", [](const generation_context&) { return 1; }));
+        const auto text = std::string{recipe_header} + "ok\tconstant\tfine\t\t\t\n" + row;
+        REQUIRE_THROWS_AS(gen.add_recipe_from_string(text, "test.tsv"), dasmig::core::tsv_error);
+        REQUIRE(gen.size() == 1); // not even the good row
+    };
+    bad("x\tbogus\t1\t\t\t\n");
+    bad("x\tint\t5..1\t\t\t\n");
+    bad("x\tint\t1\t\t\t\n");
+    bad("x\tint\ta..b\t\t\t\n");
+    bad("x\treal\t2..1\t\t\t\n");
+    bad("x\tweighted\ta|b\t\t\t\n");
+    bad("x\tweighted\ta:0|b:0\t\t\t\n");
+    bad("x\tweighted\ta:-1|b:2\t\t\t\n");
+    bad("x\tconstant\t\t\t\t\n");
+    bad("x\tconstant\t1\t\t\t1.5\n");
+    bad("ok\tconstant\tagain\t\t\t\n");
+
+    dasmig::eg gen;
+    try
+    {
+        gen.add_recipe_from_string(std::string{recipe_header} + "x\tbogus\t1\t\t\t\n", "test.tsv");
+        FAIL("expected a throw");
+    }
+    catch (const dasmig::core::tsv_error& error)
+    {
+        REQUIRE(std::string{error.what()}.find("test.tsv:2") != std::string::npos);
+        REQUIRE(std::string{error.what()}.find("kind") != std::string::npos);
+    }
+}
+
+TEST_CASE("recipe: a path that clashes with an existing key throws and adds nothing", "[recipe]")
+{
+    dasmig::eg gen;
+    gen.add(field(L"ship", [](const generation_context&) { return 1; }));
+    REQUIRE_THROWS_AS(gen.add_recipe_from_string(std::string{recipe_header} +
+                                                 "fine\tconstant\t1\t\t\t\n"
+                                                 "ship.name\tconstant\tNova\t\t\t\n"),
+                      std::invalid_argument);
+    REQUIRE(gen.size() == 1);
+}
+
+TEST_CASE("recipe: add_recipe reads a file", "[recipe]")
+{
+    const auto path = std::filesystem::temp_directory_path() / "dasmig-entity-recipe-test.tsv";
+    {
+        std::ofstream out{path, std::ios::binary};
+        out << recipe_header << "crew\tint\t2..9\t\t\t\n" << "name\tchoice\tÅsa|João\t\t\t\n";
+    }
+    dasmig::eg gen;
+    gen.add_recipe(path);
+    std::filesystem::remove(path);
+    REQUIRE(gen.size() == 2);
+    const auto name = gen.generate({}, 3).get<std::wstring>(L"name");
+    REQUIRE((name == L"Åsa" || name == L"João"));
+
+    REQUIRE_THROWS_AS(gen.add_recipe(path), dasmig::core::tsv_error); // gone
+}
+
+TEST_CASE("recipe: batches equal the single calls", "[recipe][batch]")
+{
+    dasmig::eg gen;
+    gen.add_recipe_from_string(std::string{recipe_header} + "crew\tint\t2..99\t\t\t\n");
+    const auto batch = gen.generate_batch({.count = 20}, {.count = 20, .threads = 3}, 5);
+    for (std::size_t i = 0; i < batch.size(); ++i)
+        REQUIRE(batch[i].to_json() == gen.generate({}, dasmig::core::item_seed(5, i)).to_json());
 }
