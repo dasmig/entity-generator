@@ -1047,6 +1047,8 @@ auto prefab = world.entity();
 adapter.spawn_into(prefab, gen.generate({}));
 ```
 
+If a mapping throws during `spawn()`, the new Flecs entity is destructed before the exception propagates, as in the EnTT adapter.
+
 **API summary** (identical for both adapters):
 
 | Method | Description |

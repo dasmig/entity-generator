@@ -198,6 +198,25 @@ TEST_CASE("flecs_adapter spawn_batch with empty vector",
     REQUIRE(entities.empty());
 }
 
+TEST_CASE("flecs_adapter spawn leaves no entity behind when a mapping throws",
+          "[flecs_adapter][spawn]")
+{
+    flecs::world world;
+    dasmig::ext::flecs_adapter adapter(world);
+    dasmig::eg gen;
+
+    gen.add(std::make_unique<int_component>(L"age", 30));
+    adapter.map<Age>(L"age", [](const dasmig::entity& e) {
+        return Age{e.get<int>(L"age")};
+    });
+    // The key holds an int, not a std::wstring: the direct map throws.
+    adapter.map<Name>(L"age");
+
+    REQUIRE_THROWS(adapter.spawn(gen.generate({})));
+    // The Age set before the throw went with the entity.
+    REQUIRE(world.count<Age>() == 0);
+}
+
 TEST_CASE("flecs_adapter fluent chaining", "[flecs_adapter][api]")
 {
     flecs::world world;

@@ -1,4 +1,5 @@
 CXX      := clang++
+CC       := clang
 CXXFLAGS := -std=c++23 -Wall -Wextra -Wpedantic -Wno-c2y-extensions -I.
 BUILD    := build
 PYTHON   := python3
@@ -17,7 +18,7 @@ BENCH_FLAGS := -O2 -DNDEBUG
 COV_FLAGS := -fprofile-instr-generate -fcoverage-mapping
 COV_DIR   := coverage
 
-.PHONY: all clean lint test entt-test bench bench-gate coverage docs
+.PHONY: all clean lint test entt-test flecs-test bench bench-gate coverage docs
 
 all: $(EXAMPLE_BIN)
 
@@ -40,6 +41,15 @@ entt-test: $(HEADERS) dasmig/ext/entt_adapter.hpp | $(BUILD)
 	./$(BUILD)/entt_test_runner
 	$(CXX) $(CXXFLAGS) -isystem $(ENTT_DIR) -o $(BUILD)/entt_demo examples/entt_demo.cpp
 	./$(BUILD)/entt_demo
+
+# The Flecs adapter's tests, built against a Flecs checkout (FLECS_DIR is its
+# distr folder, which holds the single-file flecs.c and flecs.h).
+FLECS_DIR ?=
+flecs-test: $(HEADERS) dasmig/ext/flecs_adapter.hpp | $(BUILD)
+	@test -n "$(FLECS_DIR)" || { echo "set FLECS_DIR to the distr folder of a Flecs checkout"; exit 1; }
+	$(CC) -c -O1 -std=gnu99 -Dflecs_STATIC -isystem $(FLECS_DIR) -o $(BUILD)/flecs.o $(FLECS_DIR)/flecs.c
+	$(CXX) $(CXXFLAGS) -Dflecs_STATIC -isystem $(FLECS_DIR) -o $(BUILD)/flecs_test_runner tests/test_flecs_adapter.cpp tests/catch_amalgamated.cpp $(BUILD)/flecs.o -lpthread -lm
+	./$(BUILD)/flecs_test_runner
 
 # Benchmarks (bench/): an optimized build run on each tier, and again with
 # the lite tier compiled in where the library has data. Results in
