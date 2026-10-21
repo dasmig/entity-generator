@@ -71,6 +71,26 @@ jobs:
         with:
           path: doc/api/html
 
+  # The optional EnTT adapter header and its demo, against a pinned EnTT.
+  entt-adapter:
+    name: EnTT adapter
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with: {repository: skypjack/entt, ref: v3.14.0, path: libs/entt}
+
+      - name: Install LLVM 18 and libstdc++ 14
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14 clang-18
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+
+      - name: Adapter tests and demo
+        run: make entt-test ENTT_DIR=libs/entt/src
+
   # Output must be identical everywhere (dasmig-core): the known-answer tests
   # run on every compiler, standard library and CPU the libraries target.
   compat:
