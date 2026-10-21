@@ -80,13 +80,24 @@ class entt_adapter
 
     /// @brief Create an EnTT entity from a generated entity.
     ///
-    /// Emplaces all mapped components whose keys are present.
+    /// Emplaces all mapped components whose keys are present. If a mapping
+    /// throws (a direct map of the wrong type, a mapper reading a missing
+    /// key), the new entity is destroyed and the exception propagates, so the
+    /// registry holds no half-built entity.
     /// @param src The generated entity.
     /// @return The new EnTT entity.
     [[nodiscard]] entt::entity spawn(const entity& src)
     {
         auto target = _registry.create();
-        apply(target, src);
+        try
+        {
+            apply(target, src);
+        }
+        catch (...)
+        {
+            _registry.destroy(target);
+            throw;
+        }
         return target;
     }
 
@@ -99,6 +110,8 @@ class entt_adapter
     }
 
     /// @brief Create EnTT entities for a batch of generated entities.
+    ///
+    /// If a spawn throws, the entities spawned before it stay in the registry.
     /// @param sources A vector of generated entities.
     /// @return A vector of new EnTT entities.
     [[nodiscard]] std::vector<entt::entity> spawn_batch(

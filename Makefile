@@ -17,7 +17,7 @@ BENCH_FLAGS := -O2 -DNDEBUG
 COV_FLAGS := -fprofile-instr-generate -fcoverage-mapping
 COV_DIR   := coverage
 
-.PHONY: all clean lint test bench bench-gate coverage docs
+.PHONY: all clean lint test entt-test bench bench-gate coverage docs
 
 all: $(EXAMPLE_BIN)
 
@@ -29,6 +29,17 @@ $(TEST_BIN): $(TEST_SRC) $(HEADERS) | $(BUILD)
 
 test: $(TEST_BIN)
 	./$(TEST_BIN)
+
+# The EnTT adapter: its tests and the village demo, built against an EnTT
+# checkout (ENTT_DIR is its src folder). Not part of `test`, which needs no
+# third-party code.
+ENTT_DIR ?=
+entt-test: $(HEADERS) dasmig/ext/entt_adapter.hpp | $(BUILD)
+	@test -n "$(ENTT_DIR)" || { echo "set ENTT_DIR to the src folder of an EnTT checkout"; exit 1; }
+	$(CXX) $(CXXFLAGS) -isystem $(ENTT_DIR) -o $(BUILD)/entt_test_runner tests/test_entt_adapter.cpp tests/catch_amalgamated.cpp
+	./$(BUILD)/entt_test_runner
+	$(CXX) $(CXXFLAGS) -isystem $(ENTT_DIR) -o $(BUILD)/entt_demo examples/entt_demo.cpp
+	./$(BUILD)/entt_demo
 
 # Benchmarks (bench/): an optimized build run on each tier, and again with
 # the lite tier compiled in where the library has data. Results in
