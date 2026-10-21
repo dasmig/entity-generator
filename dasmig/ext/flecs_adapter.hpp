@@ -77,13 +77,24 @@ class flecs_adapter
 
     /// @brief Create a Flecs entity from a generated entity.
     ///
-    /// Sets all mapped components whose keys are present.
+    /// Sets all mapped components whose keys are present. If a mapping throws
+    /// (a direct map of the wrong type, a mapper reading a missing key), the
+    /// new entity is destructed and the exception propagates, so the world
+    /// holds no half-built entity.
     /// @param src The generated entity.
     /// @return The new Flecs entity.
     [[nodiscard]] flecs::entity spawn(const entity& src)
     {
         auto target = _world.entity();
-        apply(target, src);
+        try
+        {
+            apply(target, src);
+        }
+        catch (...)
+        {
+            target.destruct();
+            throw;
+        }
         return target;
     }
 
@@ -96,6 +107,8 @@ class flecs_adapter
     }
 
     /// @brief Create Flecs entities for a batch of generated entities.
+    ///
+    /// If a spawn throws, the entities spawned before it stay in the world.
     /// @param sources A vector of generated entities.
     /// @return A vector of new Flecs entities.
     [[nodiscard]] std::vector<flecs::entity> spawn_batch(

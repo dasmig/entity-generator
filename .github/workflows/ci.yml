@@ -91,6 +91,26 @@ jobs:
       - name: Adapter tests and demo
         run: make entt-test ENTT_DIR=libs/entt/src
 
+  # The optional Flecs adapter header, against a pinned Flecs.
+  flecs-adapter:
+    name: Flecs adapter
+    runs-on: ubuntu-24.04
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/checkout@v4
+        with: {repository: SanderMertens/flecs, ref: v4.1.1, path: libs/flecs}
+
+      - name: Install LLVM 18 and libstdc++ 14
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14 clang-18
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+
+      - name: Adapter tests
+        run: make flecs-test FLECS_DIR=libs/flecs/distr
+
   # Output must be identical everywhere (dasmig-core): the known-answer tests
   # run on every compiler, standard library and CPU the libraries target.
   compat:
