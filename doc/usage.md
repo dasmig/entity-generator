@@ -1002,6 +1002,10 @@ adapter.spawn_into(prefab, gen.generate({})); // adds mapped components
 
 **Skipped components** (weight = 0, conditional = false) are silently ignored — no EnTT component is emplaced for that key.
 
+If a mapping throws during `spawn()`, the new EnTT entity is destroyed before the exception propagates, so the registry holds no half-built entity.
+
+[`examples/entt_demo.cpp`](../examples/entt_demo.cpp) is a runnable village: dependent and conditional components, a per-call `inputs` value, views over the registry, the same registry for the same seed on any thread count, and replaying a registry entity from the signature kept in an `Origin` component.
+
 ## ECS Integration: Flecs
 
 `dasmig/ext/flecs_adapter.hpp` bridges entity-generator with [Flecs](https://github.com/SanderMertens/flecs). Same mapping pattern as the EnTT adapter.

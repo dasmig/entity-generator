@@ -241,6 +241,26 @@ TEST_CASE("entt_adapter spawn_batch with empty vector",
     REQUIRE(entities.empty());
 }
 
+TEST_CASE("entt_adapter spawn leaves no entity behind when a mapping throws",
+          "[entt_adapter][spawn]")
+{
+    entt::registry registry;
+    dasmig::ext::entt_adapter adapter(registry);
+    dasmig::eg gen;
+
+    gen.add(std::make_unique<int_component>(L"age", 30));
+    adapter.map<Age>(L"age", [](const dasmig::entity& e) {
+        return Age{e.get<int>(L"age")};
+    });
+    // The key holds an int, not a std::wstring: the direct map throws.
+    adapter.map<Name>(L"age");
+
+    const auto entities_before = registry.storage<entt::entity>().free_list();
+    REQUIRE_THROWS(adapter.spawn(gen.generate({})));
+    REQUIRE(registry.storage<entt::entity>().free_list() == entities_before);
+    REQUIRE(registry.view<Age>().size() == 0);
+}
+
 TEST_CASE("entt_adapter fluent chaining", "[entt_adapter][api]")
 {
     entt::registry registry;
